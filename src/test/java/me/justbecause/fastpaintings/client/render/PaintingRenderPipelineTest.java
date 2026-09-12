@@ -30,9 +30,9 @@ class PaintingRenderPipelineTest {
 
         unfreezeRegistry(BuiltInRegistries.BLOCK);
         unfreezeRegistry(BuiltInRegistries.BLOCK_ENTITY_TYPE);
-        try {
+        if (!BuiltInRegistries.BLOCK.containsKey(ModRegistry.PAINTING_BLOCK_ID)) {
             ModRegistry.init();
-        } catch (Exception ignored) {}
+        }
     }
 
     private static void unfreezeRegistry(Object registry) throws Exception {
