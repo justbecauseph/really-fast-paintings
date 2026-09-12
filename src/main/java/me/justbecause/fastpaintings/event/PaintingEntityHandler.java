@@ -18,6 +18,10 @@ public final class PaintingEntityHandler {
     private static void onEntityLoad(Entity entity, ServerLevel serverLevel) {
         // Parity: Only automatically convert exact vanilla Painting entities (not modded subclasses)
         if (entity.getType() == EntityTypes.PAINTING && entity instanceof Painting painting) {
+            if (PaintingConversionService.isRestorationSuppressed(painting)) {
+                return;
+            }
+
             boolean shouldConvert = painting.isLoadedFromDisk()
                     ? FastPaintings.CONFIG.convertExistingPaintings
                     : FastPaintings.CONFIG.convertCommandCreatedPaintings;

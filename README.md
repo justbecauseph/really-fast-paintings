@@ -94,6 +94,15 @@ All Really Fast Paintings commands require gamemaster-level command permission.
 - `/fastpaintings restore`
   - Restores loaded block-backed paintings to vanilla `Painting` entities for migration or safe uninstallation.
 
+### ⚠️ Safe Uninstallation Procedure
+
+To uninstall Really Fast Paintings cleanly from a world without losing placed paintings:
+
+1. In `config/fastpaintings.json`, set `"convertExistingPaintings": false` and `"convertCommandCreatedPaintings": false` and save the configuration.
+2. Load the world and run `/fastpaintings restore` across all areas where block-backed paintings exist. This restores them to vanilla `Painting` entities with persistent suppression markers.
+3. Verify via `/fastpaintings stats` that no unconverted block-backed paintings remain.
+4. Shut down the server/client and safely remove the Really Fast Paintings mod JAR.
+
 ---
 
 ## 🧱 Architecture
