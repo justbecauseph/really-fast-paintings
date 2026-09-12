@@ -12,3 +12,5 @@ out/
 .classpath
 .settings/
 .DS_Store
+
+PLAN.md
