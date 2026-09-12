@@ -88,14 +88,16 @@ config/fastpaintings.json
 All Really Fast Paintings commands require gamemaster-level command permission.
 
 > [!IMPORTANT]
-> **Command Scope:** All `/fastpaintings` commands (`stats`, `convert`, `restore`) inspect and operate **only on currently loaded chunks around active players** (or spawn chunks if no players are online). They **do not** scan offline region files, unloaded chunks, or unvisited dimensions. To migrate or inspect an entire world, operators or players must visit all areas containing paintings while chunks are loaded.
+> **Command Scope:**
+> - `/fastpaintings convert` operates on **all currently loaded painting entities across all dimensions**.
+> - `/fastpaintings stats` and `/fastpaintings restore` inspect and operate **only on currently loaded chunks around active players** (or spawn chunks if no players are online). They **do not** scan offline region files, unloaded chunks, or unvisited dimensions. To inspect or restore paintings across an entire world, operators or players must visit all areas containing paintings while chunks are loaded.
 
 - `/fastpaintings stats`
-  - Displays the total number of currently loaded vanilla painting entities, block painting anchors, and multipart helper parts across loaded chunks.
+  - Scans deduplicated loaded chunks around active players/spawn and displays the total count of loaded vanilla painting entities, block painting anchors, and multipart helper parts (including any orphan helper parts).
 - `/fastpaintings convert`
-  - Attempts to convert currently loaded vanilla painting entities across all dimensions to block-backed paintings (explicit execution overrides prior restoration suppression).
+  - Attempts to convert currently loaded vanilla painting entities across all dimensions to block-backed paintings (explicit operator execution overrides prior restoration suppression).
 - `/fastpaintings restore`
-  - Restores loaded block-backed paintings back to vanilla `Painting` entities for migration or safe uninstallation.
+  - Restores block-backed paintings in loaded chunks around active players/spawn back to vanilla `Painting` entities for migration or safe uninstallation.
 
 ### ⚠️ Safe Uninstallation Procedure
 

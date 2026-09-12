@@ -7,6 +7,7 @@ import me.justbecause.fastpaintings.init.ModRegistry;
 import me.justbecause.fastpaintings.painting.PaintingConversionService;
 import me.justbecause.fastpaintings.painting.PaintingFootprint;
 import me.justbecause.fastpaintings.painting.PaintingPlacementService;
+import me.justbecause.fastpaintings.painting.RestorationException;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -27,7 +28,12 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.phys.AABB;
 
+import me.justbecause.fastpaintings.command.PaintingMigrationCommand;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.level.chunk.LevelChunk;
+
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class FastPaintingsGameTests {
 
@@ -244,13 +250,15 @@ public class FastPaintingsGameTests {
         helper.assertTrue(helper.getBlockState(new BlockPos(4, 3, 3)).is(ModRegistry.PAINTING_PART_BLOCK),
                 "Painting B part (4,3,3) damaged");
 
-        // Verify exactly 1 painting item dropped
+        // Verify exactly 1 painting item dropped (both entity count and item stack count == 1)
         List<ItemEntity> drops = level.getEntitiesOfClass(
                 ItemEntity.class,
                 new AABB(anchorPosA).inflate(5.0),
                 item -> item.getItem().is(Items.PAINTING)
         );
-        helper.assertTrue(drops.size() == 1, "Expected exactly 1 drop, but found " + drops.size());
+        helper.assertTrue(drops.size() == 1, "Expected exactly 1 drop entity, but found " + drops.size());
+        int totalDropCount = drops.stream().mapToInt(drop -> drop.getItem().getCount()).sum();
+        helper.assertTrue(totalDropCount == 1, "Expected total drop item count 1, but found " + totalDropCount);
 
         helper.succeed();
     }
@@ -644,6 +652,325 @@ public class FastPaintingsGameTests {
 
         BlockState anchorState = helper.getBlockState(relativeAnchor);
         helper.assertTrue(anchorState.is(ModRegistry.PAINTING_BLOCK), "Anchor block missing after operator reconversion");
+
+        helper.succeed();
+    }
+
+    @GameTest
+    public void testStatsCountsOrphanHelperPartsWithoutAnchors(GameTestHelper helper) {
+        BlockPos wallPos = new BlockPos(2, 2, 2);
+        BlockPos partPos = new BlockPos(2, 2, 3);
+        helper.setBlock(wallPos, Blocks.STONE);
+
+        // Place a lone orphan helper part block without an anchor
+        BlockState orphanState = ModRegistry.PAINTING_PART_BLOCK.defaultBlockState()
+                .setValue(PaintingPartBlock.FACING, Direction.SOUTH);
+        helper.setBlock(partPos, orphanState);
+
+        ServerLevel level = helper.getLevel();
+        BlockPos absPartPos = helper.absolutePos(partPos);
+        LevelChunk chunk = level.getChunkAt(absPartPos);
+
+        int anchors = PaintingMigrationCommand.countAnchorsInChunk(chunk);
+        int helperParts = PaintingMigrationCommand.countHelperPartsInChunk(chunk);
+
+        helper.assertTrue(anchors == 0, "Expected 0 anchors in chunk, found " + anchors);
+        helper.assertTrue(helperParts >= 1, "Expected at least 1 helper part in chunk, found " + helperParts);
+
+        // Clean up
+        helper.setBlock(partPos, Blocks.AIR);
+        helper.setBlock(wallPos, Blocks.AIR);
+
+        helper.succeed();
+    }
+
+    @GameTest
+    public void testRestorationRemovalThrowsRollback(GameTestHelper helper) {
+        // Build 3x3 stone wall
+        for (int x = 1; x <= 3; x++) {
+            for (int y = 1; y <= 3; y++) {
+                helper.setBlock(new BlockPos(x, y, 2), Blocks.STONE);
+                helper.setBlock(new BlockPos(x, y, 3), Blocks.AIR);
+            }
+        }
+
+        ServerLevel level = helper.getLevel();
+        Holder<PaintingVariant> match = level.registryAccess().lookupOrThrow(Registries.PAINTING_VARIANT)
+                .getOrThrow(PaintingVariants.MATCH); // 2x2
+
+        BlockPos relativeAnchor = new BlockPos(2, 2, 3);
+        BlockPos anchorPos = helper.absolutePos(relativeAnchor);
+        boolean placed = PaintingPlacementService.tryPlacePainting(
+                level, anchorPos, Direction.SOUTH, match, null, level.getRandom()
+        );
+        helper.assertTrue(placed, "Failed to place 2x2 match painting");
+
+        PaintingBlockEntity be = helper.getBlockEntity(relativeAnchor, PaintingBlockEntity.class);
+        helper.assertTrue(be != null, "Anchor BE missing");
+
+        boolean caughtExpected = false;
+        try {
+            PaintingConversionService.tryRestore(be, level, painting -> true, (pbe, lvl) -> {
+                // Mutate at least one cell before throwing
+                lvl.setBlock(pbe.getBlockPos(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+                throw new RuntimeException("Simulated failure during footprint removal");
+            });
+        } catch (RuntimeException ex) {
+            if ("Simulated failure during footprint removal".equals(ex.getMessage())) {
+                caughtExpected = true;
+            }
+        }
+        helper.assertTrue(caughtExpected, "Expected removal throw to be rethrown");
+
+        // Footprint recovered
+        helper.assertTrue(helper.getBlockState(relativeAnchor).is(ModRegistry.PAINTING_BLOCK), "Anchor block missing after removal throw");
+        PaintingBlockEntity restoredBe = helper.getBlockEntity(relativeAnchor, PaintingBlockEntity.class);
+        helper.assertTrue(restoredBe != null && restoredBe.getVariant() != null && restoredBe.getVariant().is(PaintingVariants.MATCH),
+                "Restored BE or variant corrupted");
+        helper.assertTrue(!restoredBe.isRemoving(), "Anchor BE removing flag was not reset to false");
+
+        for (BlockPos relCell : List.of(new BlockPos(3, 2, 3), new BlockPos(2, 3, 3), new BlockPos(3, 3, 3))) {
+            helper.assertTrue(helper.getBlockState(relCell).is(ModRegistry.PAINTING_PART_BLOCK), "Part missing at " + relCell);
+        }
+
+        // Verify surviving anchor is operational (can be removed cleanly without being stuck in removing state)
+        restoredBe.removeFootprint(level, false, null);
+        helper.assertTrue(helper.getBlockState(relativeAnchor).isAir(), "Surviving anchor failed to remove cleanly");
+
+        List<Painting> paintings = level.getEntitiesOfClass(
+                Painting.class,
+                new AABB(anchorPos).inflate(3.0),
+                Painting::isAlive
+        );
+        helper.assertTrue(paintings.isEmpty(), "Entity was leaked during removal throw");
+
+        helper.succeed();
+    }
+
+    @GameTest
+    public void testRestorationIncompleteRemovalAborts(GameTestHelper helper) {
+        // Build 3x3 stone wall
+        for (int x = 1; x <= 3; x++) {
+            for (int y = 1; y <= 3; y++) {
+                helper.setBlock(new BlockPos(x, y, 2), Blocks.STONE);
+                helper.setBlock(new BlockPos(x, y, 3), Blocks.AIR);
+            }
+        }
+
+        ServerLevel level = helper.getLevel();
+        Holder<PaintingVariant> match = level.registryAccess().lookupOrThrow(Registries.PAINTING_VARIANT)
+                .getOrThrow(PaintingVariants.MATCH); // 2x2
+
+        BlockPos relativeAnchor = new BlockPos(2, 2, 3);
+        BlockPos anchorPos = helper.absolutePos(relativeAnchor);
+        boolean placed = PaintingPlacementService.tryPlacePainting(
+                level, anchorPos, Direction.SOUTH, match, null, level.getRandom()
+        );
+        helper.assertTrue(placed, "Failed to place 2x2 match painting");
+
+        PaintingBlockEntity be = helper.getBlockEntity(relativeAnchor, PaintingBlockEntity.class);
+        helper.assertTrue(be != null, "Anchor BE missing");
+
+        AtomicBoolean spawnerCalled = new AtomicBoolean(false);
+        boolean caughtExpected = false;
+        try {
+            PaintingConversionService.tryRestore(be, level, painting -> {
+                spawnerCalled.set(true);
+                return true;
+            }, (pbe, lvl) -> {
+                // Removal write rejected: footprint cells are not cleared
+            });
+        } catch (IllegalStateException ex) {
+            if (ex.getMessage().contains("Footprint removal incomplete")) {
+                caughtExpected = true;
+            }
+        }
+        helper.assertTrue(caughtExpected, "Expected IllegalStateException for incomplete footprint removal");
+        helper.assertTrue(!spawnerCalled.get(), "Spawner was unexpectedly invoked after incomplete removal");
+
+        // Footprint recovered and operational
+        helper.assertTrue(helper.getBlockState(relativeAnchor).is(ModRegistry.PAINTING_BLOCK), "Anchor block missing after incomplete removal rollback");
+        PaintingBlockEntity restoredBe = helper.getBlockEntity(relativeAnchor, PaintingBlockEntity.class);
+        helper.assertTrue(restoredBe != null && !restoredBe.isRemoving(), "Surviving anchor BE missing or left in removing state");
+
+        List<Painting> paintings = level.getEntitiesOfClass(
+                Painting.class,
+                new AABB(anchorPos).inflate(3.0),
+                Painting::isAlive
+        );
+        helper.assertTrue(paintings.isEmpty(), "Entity was leaked during incomplete removal");
+
+        helper.succeed();
+    }
+
+    @GameTest
+    public void testRestorationSpawnerThrowingWithInsertedEntity(GameTestHelper helper) {
+        // Build 3x3 stone wall
+        for (int x = 1; x <= 3; x++) {
+            for (int y = 1; y <= 3; y++) {
+                helper.setBlock(new BlockPos(x, y, 2), Blocks.STONE);
+                helper.setBlock(new BlockPos(x, y, 3), Blocks.AIR);
+            }
+        }
+
+        ServerLevel level = helper.getLevel();
+        Holder<PaintingVariant> match = level.registryAccess().lookupOrThrow(Registries.PAINTING_VARIANT)
+                .getOrThrow(PaintingVariants.MATCH); // 2x2
+
+        BlockPos relativeAnchor = new BlockPos(2, 2, 3);
+        BlockPos anchorPos = helper.absolutePos(relativeAnchor);
+        boolean placed = PaintingPlacementService.tryPlacePainting(
+                level, anchorPos, Direction.SOUTH, match, null, level.getRandom()
+        );
+        helper.assertTrue(placed, "Failed to place 2x2 match painting");
+
+        PaintingBlockEntity be = helper.getBlockEntity(relativeAnchor, PaintingBlockEntity.class);
+        helper.assertTrue(be != null, "Anchor BE missing");
+
+        boolean caughtExpected = false;
+        try {
+            PaintingConversionService.tryRestore(be, level, painting -> {
+                level.addFreshEntity(painting);
+                throw new RuntimeException("Simulated crash after inserting painting into level");
+            });
+        } catch (RuntimeException ex) {
+            if ("Simulated crash after inserting painting into level".equals(ex.getMessage())) {
+                caughtExpected = true;
+            }
+        }
+        helper.assertTrue(caughtExpected, "Expected spawner exception to be rethrown");
+
+        // Zero leaked entities
+        List<Painting> paintings = level.getEntitiesOfClass(
+                Painting.class,
+                new AABB(anchorPos).inflate(3.0),
+                Painting::isAlive
+        );
+        helper.assertTrue(paintings.isEmpty(), "Inserted painting entity was not discarded: leaked " + paintings.size() + " entities");
+
+        // Block painting restored
+        helper.assertTrue(helper.getBlockState(relativeAnchor).is(ModRegistry.PAINTING_BLOCK), "Anchor block missing after spawner throw");
+        PaintingBlockEntity restoredBe = helper.getBlockEntity(relativeAnchor, PaintingBlockEntity.class);
+        helper.assertTrue(restoredBe != null && restoredBe.getVariant() != null && restoredBe.getVariant().is(PaintingVariants.MATCH),
+                "Restored BE missing or variant corrupted");
+        helper.assertTrue(!restoredBe.isRemoving(), "Restored BE removal guard not reset");
+
+        for (BlockPos relCell : List.of(new BlockPos(3, 2, 3), new BlockPos(2, 3, 3), new BlockPos(3, 3, 3))) {
+            helper.assertTrue(helper.getBlockState(relCell).is(ModRegistry.PAINTING_PART_BLOCK), "Part missing at " + relCell);
+        }
+
+        helper.succeed();
+    }
+
+    @GameTest
+    public void testRestorationRollbackFailureThrows(GameTestHelper helper) {
+        // Build 3x3 stone wall
+        for (int x = 1; x <= 3; x++) {
+            for (int y = 1; y <= 3; y++) {
+                helper.setBlock(new BlockPos(x, y, 2), Blocks.STONE);
+                helper.setBlock(new BlockPos(x, y, 3), Blocks.AIR);
+            }
+        }
+
+        ServerLevel level = helper.getLevel();
+        Holder<PaintingVariant> match = level.registryAccess().lookupOrThrow(Registries.PAINTING_VARIANT)
+                .getOrThrow(PaintingVariants.MATCH); // 2x2
+
+        BlockPos relativeAnchor = new BlockPos(2, 2, 3);
+        BlockPos anchorPos = helper.absolutePos(relativeAnchor);
+        boolean placed = PaintingPlacementService.tryPlacePainting(
+                level, anchorPos, Direction.SOUTH, match, null, level.getRandom()
+        );
+        helper.assertTrue(placed, "Failed to place 2x2 match painting");
+
+        PaintingBlockEntity be = helper.getBlockEntity(relativeAnchor, PaintingBlockEntity.class);
+        helper.assertTrue(be != null, "Anchor BE missing");
+
+        RuntimeException primaryFailure = new RuntimeException("Primary removal failure");
+        RuntimeException rollbackFailure = new RuntimeException("Rollback write threw simulated I/O error");
+
+        boolean caughtRestorationException = false;
+        try {
+            PaintingConversionService.tryRestore(
+                    be,
+                    level,
+                    painting -> true,
+                    (pbe, lvl) -> {
+                        pbe.removeFootprint(lvl, false, null);
+                        throw primaryFailure;
+                    },
+                    (lvl, fp, aPos, orig, var) -> {
+                        throw rollbackFailure;
+                    }
+            );
+        } catch (RestorationException rex) {
+            caughtRestorationException = true;
+            helper.assertTrue(rex.getMessage().contains(anchorPos.toShortString()) || rex.getMessage().contains(String.valueOf(anchorPos.getX())),
+                    "RestorationException message missing anchor location: " + rex.getMessage());
+            helper.assertTrue(rex.getCause() == rollbackFailure, "RestorationException cause is not rollbackFailure");
+            helper.assertTrue(rex.getSuppressed().length == 1 && rex.getSuppressed()[0] == primaryFailure,
+                    "RestorationException missing suppressed original error");
+        }
+        helper.assertTrue(caughtRestorationException, "Expected RestorationException when rollback write throws");
+
+        helper.succeed();
+    }
+
+    @GameTest
+    public void testOperatorReconversionPreservesSuppressionOnFailure(GameTestHelper helper) {
+        // Build 3x3 stone wall
+        for (int x = 1; x <= 3; x++) {
+            for (int y = 1; y <= 3; y++) {
+                helper.setBlock(new BlockPos(x, y, 2), Blocks.STONE);
+                helper.setBlock(new BlockPos(x, y, 3), Blocks.AIR);
+            }
+        }
+
+        ServerLevel level = helper.getLevel();
+        Holder<PaintingVariant> match = level.registryAccess().lookupOrThrow(Registries.PAINTING_VARIANT)
+                .getOrThrow(PaintingVariants.MATCH); // 2x2
+
+        BlockPos relativeAnchor = new BlockPos(2, 2, 3);
+        BlockPos anchorPos = helper.absolutePos(relativeAnchor);
+        Painting entity = new Painting(level, anchorPos, Direction.SOUTH, match);
+        level.addFreshEntity(entity);
+
+        boolean converted = PaintingConversionService.tryConvert(entity, level);
+        helper.assertTrue(converted, "Initial conversion failed");
+
+        PaintingBlockEntity be = helper.getBlockEntity(relativeAnchor, PaintingBlockEntity.class);
+        boolean restored = PaintingConversionService.tryRestore(be, level);
+        helper.assertTrue(restored, "Restoration failed");
+
+        List<Painting> paintings = level.getEntitiesOfClass(
+                Painting.class,
+                new AABB(anchorPos).inflate(2.0),
+                Painting::isAlive
+        );
+        helper.assertTrue(!paintings.isEmpty(), "Restored painting not found");
+        Painting restoredPainting = paintings.getFirst();
+
+        // Give painting special entity data (custom name) to create an obstacle
+        restoredPainting.setCustomName(Component.literal("Special Custom Painting"));
+
+        // Operator reconversion should fail because skipSpecialEntityData is true
+        boolean failedReconversion = PaintingConversionService.tryConvert(restoredPainting, level, true);
+        helper.assertTrue(!failedReconversion, "Conversion should fail when painting has special data");
+
+        // Suppression MUST still be preserved!
+        helper.assertTrue(restoredPainting.entityTags().contains(PaintingConversionService.RESTORED_TAG),
+                "Restoration tag was prematurely stripped on failed conversion");
+        helper.assertTrue(PaintingConversionService.isRestorationSuppressed(restoredPainting.getUUID()),
+                "UUID suppression was prematurely cleared on failed conversion");
+
+        // Remove obstacle
+        restoredPainting.setCustomName(null);
+
+        // Operator reconversion now succeeds
+        boolean successReconversion = PaintingConversionService.tryConvert(restoredPainting, level, true);
+        helper.assertTrue(successReconversion, "Operator reconversion failed after obstacle was removed");
+        helper.assertTrue(!restoredPainting.isAlive(), "Entity was not killed after successful reconversion");
+        helper.assertTrue(helper.getBlockState(relativeAnchor).is(ModRegistry.PAINTING_BLOCK), "Anchor block missing");
 
         helper.succeed();
     }

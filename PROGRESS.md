@@ -32,7 +32,7 @@
   - `6ccddc9`: `fix: resolve multipart painting anchors outside world origin`
   - `afa0d9e`: `test: cover callback removal and multi-tick restoration`
   - `105191d`: `fix: address reproduced restoration safety failures`
-  - Pending Commit: `fix: harden restoration safety, uninstallation scope, and honest test harness`
+  - Pending Commit: `fix: harden restoration recovery boundary, chunk-granular stats, and regression test suite`
 
 - **Modified Files:**
   - `src/main/java/me/justbecause/fastpaintings/block/PaintingPartBlock.java`
@@ -53,35 +53,40 @@
      - Added `AnchorLookupResult` (`Found`, `Unloaded`, `Orphan`) distinguishing uninspected unloaded candidates from proven orphans.
      - Prevented orphan destruction and forced chunk loads when candidate chunks are unloaded.
      - Fixed placement order in `PaintingPlacementService`: anchor is placed first and BE variant set before placing part blocks.
-  2. **Failure-Safe Multi-Tick Restoration & Atomic Rollback (1B):**
-     - Implemented `PaintingConversionService.RESTORED_TAG` (`"fastpaintings:restored"`) and transient UUID suppression set (`RESTORED_UUIDS`).
-     - Added `PaintingConversionService.tryConvert(painting, level, allowSuppressedOverride)` enabling operator `/fastpaintings convert` to clear suppression markers while automatic entity load continues to respect them.
-     - Wrapped entity spawning in `tryRestore()` with try-catch and discarded partially added entities (`painting.discard()`) on failure.
-     - Implemented `rollbackRestoration()` with verified postconditions (exact block states, waterlogged fluid states, facing, BE variant, and zero item drops). Throws `RestorationException` if rollback verification fails; rethrows spawner exceptions if rollback succeeds.
-     - Added `PaintingBlockEntity.setRemoving(boolean)` guarding `preRemoveSideEffects()` to ensure transactional rollback in `PaintingPlacementService` produces zero item drops.
-  3. **Migration Commands & Safe Uninstallation Disclosure:**
-     - Updated `PaintingMigrationCommand.runStats()` to count and report loaded-only objects: vanilla painting entities, block painting anchors, and helper parts across loaded chunks.
-     - Added explicit command scope disclaimers in commands and `README.md`: commands inspect only loaded chunks around active players (or spawn chunks), not offline world saves.
-     - Updated `README.md` uninstallation procedure: requires world backup, disabling `convertExistingPaintings`, `convertCommandCreatedPaintings`, and `convertOnPlacement`, visiting all populated areas, and verifying 0 anchors and helper parts via `/fastpaintings stats` before mod removal.
-  4. **Test Suite Hardening Without Bypasses (1C):**
-     - `PaintingPartBlockUnitTest`: Implemented a chunk-granular test stub where reading an unloaded chunk throws an immediate `AssertionError`, proving reads are never attempted in unloaded territory.
-     - `testBackingWallDestruction`: Asserts placement and anchor BE exist prior to removing backing wall, using bounded wait for neighbor propagation.
-     - `testPartAnchorResolutionAndBreakOutsideOrigin`: Triggers real block destruction (`helper.destroyBlock()`) at part position; asserts adjacent painting survives intact and drops equal exactly 1.
-     - `testCreativePartBreakZeroDrops`: Destroys part with creative mock server player; asserts all cells cleared with 0 drops.
-     - `testAnchorResolutionAllFacings`: Tests all 4 horizontal facings (NORTH, SOUTH, EAST, WEST) across both even and odd dimension parity (`POOL` 2x1 and `WANDERER` 1x2).
-     - `testPlacementFailureRollbackZeroDrops`: Injects write failure after anchor and part placement; asserts full rollback to AIR with 0 drops.
-     - `testOrphanNeighborUpdateSelfHealing`: Places lone part block, triggers neighbor change, asserts self-healing to AIR with 0 drops.
-     - `testRestorationThrowingSpawnRollback`: Injects throwing spawner on waterlogged multipart painting; asserts exact block, fluid, and variant restoration with 0 drops and no leaked entities.
-     - `testOperatorReconversionOverridesSuppression`: Proves operator reconversion clears restoration suppression and converts entity.
+  2. **Failure-Safe Restoration Recovery Boundary & Atomic Rollback (1B):**
+     - Expanded recovery boundary in `PaintingConversionService.tryRestore()` to begin before destructive footprint removal (`footprintRemover.accept`).
+     - Added pre-spawn footprint verification: validates that all footprint cells were cleared of `PAINTING_BLOCK` and `PAINTING_PART_BLOCK` before attempting entity spawning; aborts on incomplete removal without invoking the spawner.
+     - If spawning fails or throws, discards attempted entities (`painting.discard()`) to ensure 0 entity leaks.
+     - Implemented `RollbackHandler` functional interface allowing deterministic testing of verification and I/O error handling during rollback.
+     - On rollback write failure, throws `RestorationException` containing anchor position, cause, and attaches the original failure as a suppressed exception.
+     - Restores operational removal-guard state (`restoredBe.setRemoving(false)`) on surviving anchors.
+     - Preserved `RESTORED_TAG` and UUID suppression during failed operator reconversion attempts (e.g. special data obstacle) until conversion commits successfully.
+  3. **Migration Commands & Scope Disclosure:**
+     - Updated `PaintingMigrationCommand.runStats()` to collect deduplicated `Set<LevelChunk>` and count anchors via `countAnchorsInChunk` and helper parts via `countHelperPartsInChunk`.
+     - `countHelperPartsInChunk` inspects chunk sections using `section.maybeHas(...)` and iterates intra-section blocks `(0..15)`, never reading across chunk boundaries into unloaded chunks.
+     - Detects and counts orphan helper parts even without anchors.
+     - Clarified command scopes in console/player messages and `README.md`: `/fastpaintings convert` checks all loaded entities across dimensions; `/fastpaintings stats` and `/fastpaintings restore` inspect loaded chunks around active players/spawn without scanning offline region files or unloaded chunks.
+  4. **Test Suite Hardening & Honesty (1C):**
+     - `PaintingPartBlockUnitTest`: Added `testDiagnosticMakesNoReadsIntoUnloadedChunks`, verifying candidate lookup makes zero reads into unloaded chunks using chunk-granular stub assertions.
+     - `testPartAnchorResolutionAndBreakOutsideOrigin`: Asserts both `drops.size() == 1` and `totalDropCount == 1`.
+     - `testStatsCountsOrphanHelperPartsWithoutAnchors`: Proves orphan helper parts without anchors are accurately counted in chunk stats.
+     - `testRestorationRemovalThrowsRollback`: Removal throws after cell mutation; asserts footprint recovered, zero entity leaks, and surviving anchor operational (`!isRemoving`).
+     - `testRestorationIncompleteRemovalAborts`: Rejected removal aborts without invoking spawner.
+     - `testRestorationSpawnerThrowingWithInsertedEntity`: Spawner inserts entity then throws; asserts attempted entity is discarded (0 leaked entities) and block painting restored.
+     - `testRestorationRollbackFailureThrows`: Rollback write throws; asserts `RestorationException` with location, cause, and suppressed original error.
+     - `testOperatorReconversionPreservesSuppressionOnFailure`: Failed operator reconversion preserves suppression markers; removing obstacle permits conversion to succeed.
 
 - **Verification Evidence:**
-  - `./gradlew test`: 54 unit tests passed (0 failures):
-    - `me.justbecause.fastpaintings.block.PaintingPartBlockUnitTest` (4 tests)
+  - `./gradlew test`: 67 unit tests passed (0 failures):
+    - `me.justbecause.fastpaintings.block.PaintingPartBlockUnitTest` (5 tests)
     - `me.justbecause.fastpaintings.painting.PaintingFootprintTest` (31 tests)
     - `me.justbecause.fastpaintings.client.render.PaintingLodTest` (12 tests)
+    - `me.justbecause.fastpaintings.client.render.PaintingLodManagerTest` (8 tests)
     - `me.justbecause.fastpaintings.client.render.PaintingRenderMetricsTest` (4 tests)
     - `me.justbecause.fastpaintings.client.render.PaintingRenderPipelineTest` (3 tests)
-  - `./gradlew runGameTest`: 15 server GameTests passed (14 mod tests in `FastPaintingsGameTests` + 1 Fabric API test, 0 failures):
+    - `me.justbecause.fastpaintings.client.render.PaintingInstrumentationTest` (2 tests)
+    - `me.justbecause.fastpaintings.client.render.PaintingLightingCacheTest` (2 tests)
+  - `./gradlew runGameTest`: 21 server GameTests passed (20 mod tests in `FastPaintingsGameTests` + 1 Fabric API test, 0 failures):
     1. `test1x1PlacementAndBreak`
     2. `test2x2MigrationAndRestore`
     3. `testWaterloggedPreservation`
@@ -96,4 +101,11 @@
     12. `testOrphanNeighborUpdateSelfHealing`
     13. `testRestorationThrowingSpawnRollback`
     14. `testOperatorReconversionOverridesSuppression`
+    15. `testStatsCountsOrphanHelperPartsWithoutAnchors`
+    16. `testRestorationRemovalThrowsRollback`
+    17. `testRestorationIncompleteRemovalAborts`
+    18. `testRestorationSpawnerThrowingWithInsertedEntity`
+    19. `testRestorationRollbackFailureThrows`
+    20. `testOperatorReconversionPreservesSuppressionOnFailure`
   - `./gradlew build`: Build successful, generated distributable `build/libs/fastpaintings-1.0.0.jar` and `build/libs/fastpaintings-1.0.0-sources.jar`.
+

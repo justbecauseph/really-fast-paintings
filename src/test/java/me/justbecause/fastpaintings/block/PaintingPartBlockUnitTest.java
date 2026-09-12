@@ -244,4 +244,32 @@ public class PaintingPartBlockUnitTest {
                 "Expected Orphan status when all candidates in plane are loaded and none owns the part");
         assertNull(PaintingPartBlock.findAnchorPos(level, partPos, partState));
     }
+
+    @Test
+    @DisplayName("Diagnostic candidate lookup makes zero reads into unloaded chunks")
+    void testDiagnosticMakesNoReadsIntoUnloadedChunks() {
+        Direction facing = Direction.SOUTH;
+        BlockPos partPos = new BlockPos(100, 64, 100);
+        BlockState partState = ModRegistry.PAINTING_PART_BLOCK.defaultBlockState().setValue(PaintingPartBlock.FACING, facing);
+
+        // Mark all neighboring candidate chunks outside the part's home chunk as unloaded
+        ChunkPos homeChunk = ChunkPos.containing(partPos);
+        Set<ChunkPos> unloadedChunks = new HashSet<>();
+        for (int cx = homeChunk.x() - 2; cx <= homeChunk.x() + 2; cx++) {
+            for (int cz = homeChunk.z() - 2; cz <= homeChunk.z() + 2; cz++) {
+                ChunkPos cp = new ChunkPos(cx, cz);
+                if (!cp.equals(homeChunk)) {
+                    unloadedChunks.add(cp);
+                }
+            }
+        }
+
+        LevelReader level = createStubLevel(Map.of(), Map.of(), unloadedChunks);
+
+        // Verification: must not throw AssertionError from createStubLevel's unloaded chunk boundary checks
+        PaintingPartBlock.AnchorLookupResult result = PaintingPartBlock.findAnchorLookup(level, partPos, partState);
+        assertSame(PaintingPartBlock.AnchorLookupResult.Unloaded.INSTANCE, result,
+                "Expected Unloaded status without attempting reads into unloaded chunks");
+        assertNull(PaintingPartBlock.findAnchorPos(level, partPos, partState));
+    }
 }

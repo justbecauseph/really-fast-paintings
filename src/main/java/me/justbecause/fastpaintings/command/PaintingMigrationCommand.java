@@ -19,6 +19,8 @@ import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.decoration.painting.Painting;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.chunk.LevelChunkSection;
+import me.justbecause.fastpaintings.init.ModRegistry;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -49,6 +51,7 @@ public final class PaintingMigrationCommand {
         int totalEntities = 0;
         int totalAnchors = 0;
         int totalHelperParts = 0;
+        int totalScannedChunks = 0;
 
         Iterable<ServerLevel> levels = (source.getEntity() instanceof ServerPlayer player)
                 ? List.of(player.level())
@@ -61,25 +64,23 @@ public final class PaintingMigrationCommand {
                 }
             }
 
-            Set<PaintingBlockEntity> anchors = findLoadedAnchors(level, source);
-            totalAnchors += anchors.size();
-            for (PaintingBlockEntity pbe : anchors) {
-                for (BlockPos pos : pbe.getFootprint().occupiedCells()) {
-                    if (!pos.equals(pbe.getBlockPos()) && level.getBlockState(pos).is(me.justbecause.fastpaintings.init.ModRegistry.PAINTING_PART_BLOCK)) {
-                        totalHelperParts++;
-                    }
-                }
+            Set<LevelChunk> chunks = findLoadedChunks(level, source);
+            totalScannedChunks += chunks.size();
+            for (LevelChunk chunk : chunks) {
+                totalAnchors += countAnchorsInChunk(chunk);
+                totalHelperParts += countHelperPartsInChunk(chunk);
             }
         }
 
         final int entities = totalEntities;
         final int anchors = totalAnchors;
         final int parts = totalHelperParts;
+        final int scannedChunks = totalScannedChunks;
         source.sendSuccess(() -> Component.literal(
-                String.format("§6[FastPaintings]§r Loaded painting objects (inspects loaded chunks around active players only; does not scan offline saves):\n" +
+                String.format("§6[FastPaintings]§r Scanned §e%d§r loaded chunks (inspects loaded chunks around active players/spawn; does not scan offline saves or unloaded chunks):\n" +
                         "  - Vanilla painting entities: §e%d§r\n" +
                         "  - Block painting anchors: §e%d§r\n" +
-                        "  - Multipart helper parts: §e%d§r", entities, anchors, parts)
+                        "  - Multipart helper parts: §e%d§r", scannedChunks, entities, anchors, parts)
         ), false);
 
         return 1;
@@ -106,7 +107,7 @@ public final class PaintingMigrationCommand {
 
         final int count = converted;
         source.sendSuccess(() -> Component.literal(
-                String.format("§6[FastPaintings]§r Converted §a%d§r painting entities across all dimensions to block-backed paintings.", count)
+                String.format("§6[FastPaintings]§r Converted §a%d§r painting entities across all dimensions to block-backed paintings (Scope: all loaded entities in all dimensions).", count)
         ), true);
 
         return converted;
@@ -116,13 +117,23 @@ public final class PaintingMigrationCommand {
         CommandSourceStack source = context.getSource();
         int restored = 0;
         int skipped = 0;
+        int totalScannedChunks = 0;
 
         Iterable<ServerLevel> levels = (source.getEntity() instanceof ServerPlayer player)
                 ? List.of(player.level())
                 : source.getServer().getAllLevels();
 
         for (ServerLevel level : levels) {
-            Set<PaintingBlockEntity> toRestore = findLoadedAnchors(level, source);
+            Set<LevelChunk> chunks = findLoadedChunks(level, source);
+            totalScannedChunks += chunks.size();
+            Set<PaintingBlockEntity> toRestore = new java.util.LinkedHashSet<>();
+            for (LevelChunk chunk : chunks) {
+                for (BlockEntity be : chunk.getBlockEntities().values()) {
+                    if (be instanceof PaintingBlockEntity pbe) {
+                        toRestore.add(pbe);
+                    }
+                }
+            }
 
             for (PaintingBlockEntity pbe : toRestore) {
                 if (PaintingConversionService.tryRestore(pbe, level)) {
@@ -135,22 +146,23 @@ public final class PaintingMigrationCommand {
 
         final int count = restored;
         final int skippedCount = skipped;
+        final int scannedChunks = totalScannedChunks;
         source.sendSuccess(() -> Component.literal(
-                String.format("§6[FastPaintings]§r Restored §a%d§r block-backed paintings back to vanilla entities (Skipped: %d).", count, skippedCount)
+                String.format("§6[FastPaintings]§r Restored §a%d§r block-backed paintings back to vanilla entities (Skipped: %d) (Scope: inspected %d loaded chunks around active players/spawn).", count, skippedCount, scannedChunks)
         ), true);
 
         return restored;
     }
 
-    private static Set<PaintingBlockEntity> findLoadedAnchors(ServerLevel level, CommandSourceStack source) {
-        Set<PaintingBlockEntity> anchors = new java.util.LinkedHashSet<>();
+    public static Set<LevelChunk> findLoadedChunks(ServerLevel level, CommandSourceStack source) {
+        Set<LevelChunk> chunks = new java.util.LinkedHashSet<>();
+        int chunkRadius = 16;
         if (source.getEntity() instanceof ServerPlayer player && level == player.level()) {
-            int chunkRadius = 16;
             int playerChunkX = SectionPos.blockToSectionCoord(player.getBlockX());
             int playerChunkZ = SectionPos.blockToSectionCoord(player.getBlockZ());
             for (int cx = playerChunkX - chunkRadius; cx <= playerChunkX + chunkRadius; cx++) {
                 for (int cz = playerChunkZ - chunkRadius; cz <= playerChunkZ + chunkRadius; cz++) {
-                    collectAnchorsInChunk(level, cx, cz, anchors);
+                    collectChunk(level, cx, cz, chunks);
                 }
             }
         } else {
@@ -160,7 +172,7 @@ public final class PaintingMigrationCommand {
                     int pChunkZ = SectionPos.blockToSectionCoord(p.getBlockZ());
                     for (int cx = pChunkX - 16; cx <= pChunkX + 16; cx++) {
                         for (int cz = pChunkZ - 16; cz <= pChunkZ + 16; cz++) {
-                            collectAnchorsInChunk(level, cx, cz, anchors);
+                            collectChunk(level, cx, cz, chunks);
                         }
                     }
                 }
@@ -170,25 +182,53 @@ public final class PaintingMigrationCommand {
                 int spawnChunkZ = SectionPos.blockToSectionCoord(spawn.getZ());
                 for (int cx = spawnChunkX - 16; cx <= spawnChunkX + 16; cx++) {
                     for (int cz = spawnChunkZ - 16; cz <= spawnChunkZ + 16; cz++) {
-                        collectAnchorsInChunk(level, cx, cz, anchors);
+                        collectChunk(level, cx, cz, chunks);
                     }
                 }
             }
         }
-        return anchors;
+        return chunks;
     }
 
-    private static void collectAnchorsInChunk(ServerLevel level, int cx, int cz, Set<PaintingBlockEntity> anchors) {
+    private static void collectChunk(ServerLevel level, int cx, int cz, Set<LevelChunk> chunks) {
         if (level.getChunkSource().hasChunk(cx, cz)) {
             LevelChunk chunk = level.getChunkSource().getChunk(cx, cz, false);
             if (chunk != null) {
-                for (BlockEntity be : chunk.getBlockEntities().values()) {
-                    if (be instanceof PaintingBlockEntity pbe) {
-                        anchors.add(pbe);
+                chunks.add(chunk);
+            }
+        }
+    }
+
+    public static int countAnchorsInChunk(LevelChunk chunk) {
+        int count = 0;
+        for (BlockEntity be : chunk.getBlockEntities().values()) {
+            if (be instanceof PaintingBlockEntity) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    public static int countHelperPartsInChunk(LevelChunk chunk) {
+        int count = 0;
+        for (LevelChunkSection section : chunk.getSections()) {
+            if (section == null || section.hasOnlyAir()) {
+                continue;
+            }
+            if (!section.maybeHas(state -> state.is(ModRegistry.PAINTING_PART_BLOCK))) {
+                continue;
+            }
+            for (int y = 0; y < 16; y++) {
+                for (int z = 0; z < 16; z++) {
+                    for (int x = 0; x < 16; x++) {
+                        if (section.getBlockState(x, y, z).is(ModRegistry.PAINTING_PART_BLOCK)) {
+                            count++;
+                        }
                     }
                 }
             }
         }
+        return count;
     }
 
     private PaintingMigrationCommand() {}

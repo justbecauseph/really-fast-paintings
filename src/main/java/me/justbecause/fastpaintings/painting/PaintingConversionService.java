@@ -2,6 +2,7 @@ package me.justbecause.fastpaintings.painting;
 
 import me.justbecause.fastpaintings.FastPaintings;
 import me.justbecause.fastpaintings.block.entity.PaintingBlockEntity;
+import me.justbecause.fastpaintings.init.ModRegistry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.Holder;
@@ -57,10 +58,7 @@ public final class PaintingConversionService {
         }
 
         if (isRestorationSuppressed(painting)) {
-            if (allowSuppressedOverride) {
-                painting.removeTag(RESTORED_TAG);
-                unsuppressRestoredEntity(painting.getUUID());
-            } else {
+            if (!allowSuppressedOverride) {
                 return false;
             }
         }
@@ -109,6 +107,8 @@ public final class PaintingConversionService {
         );
 
         if (success) {
+            painting.removeTag(RESTORED_TAG);
+            unsuppressRestoredEntity(painting.getUUID());
             painting.kill(serverLevel);
             FastPaintings.LOGGER.debug("Successfully converted painting at {} to block-backed decoration", anchorPos);
             return true;
@@ -125,6 +125,36 @@ public final class PaintingConversionService {
             PaintingBlockEntity blockEntity,
             ServerLevel serverLevel,
             java.util.function.Predicate<Painting> entitySpawner
+    ) {
+        return tryRestore(blockEntity, serverLevel, entitySpawner, (be, lvl) -> be.removeFootprint(lvl, false, null));
+    }
+
+    @FunctionalInterface
+    public interface RollbackHandler {
+        boolean rollback(
+                ServerLevel serverLevel,
+                PaintingFootprint footprint,
+                BlockPos anchorPos,
+                Map<BlockPos, BlockState> originalStates,
+                Holder<PaintingVariant> variant
+        ) throws Throwable;
+    }
+
+    public static boolean tryRestore(
+            PaintingBlockEntity blockEntity,
+            ServerLevel serverLevel,
+            java.util.function.Predicate<Painting> entitySpawner,
+            java.util.function.BiConsumer<PaintingBlockEntity, ServerLevel> footprintRemover
+    ) {
+        return tryRestore(blockEntity, serverLevel, entitySpawner, footprintRemover, PaintingConversionService::rollbackRestoration);
+    }
+
+    public static boolean tryRestore(
+            PaintingBlockEntity blockEntity,
+            ServerLevel serverLevel,
+            java.util.function.Predicate<Painting> entitySpawner,
+            java.util.function.BiConsumer<PaintingBlockEntity, ServerLevel> footprintRemover,
+            RollbackHandler rollbackHandler
     ) {
         Holder<PaintingVariant> variant = blockEntity.getVariant();
         if (variant == null) {
@@ -149,54 +179,86 @@ public final class PaintingConversionService {
             originalStates.put(pos.immutable(), serverLevel.getBlockState(pos));
         }
 
-        // Tag and record restoration suppression to prevent scheduled callbacks or ENTITY_LOAD from reconverting
+        // Tag and record restoration suppression before any destructive mutation
         painting.addTag(RESTORED_TAG);
         suppressRestoredEntity(painting.getUUID());
 
-        // Remove the block-backed footprint
-        blockEntity.removeFootprint(serverLevel, false, null);
+        boolean committed = false;
+        Throwable failure = null;
 
-        // Attempt to spawn the vanilla entity
-        boolean added = false;
-        Throwable spawnError = null;
         try {
-            added = entitySpawner.test(painting);
+            // Destructive removal inside the recovery boundary
+            footprintRemover.accept(blockEntity, serverLevel);
+
+            // Verify all footprint cells were removed (no leftover block-backed cells)
+            for (BlockPos pos : footprint.occupiedCells()) {
+                BlockState state = serverLevel.getBlockState(pos);
+                if (state.is(ModRegistry.PAINTING_BLOCK) || state.is(ModRegistry.PAINTING_PART_BLOCK)) {
+                    throw new IllegalStateException("Footprint removal incomplete: cell " + pos + " still occupied by " + state.getBlock());
+                }
+            }
+
+            // Attempt to spawn the vanilla entity
+            boolean added = entitySpawner.test(painting);
+            if (!added) {
+                return false;
+            }
+
+            // Verify entity is alive
+            if (!painting.isAlive()) {
+                throw new IllegalStateException("Entity spawner reported success but entity is not alive");
+            }
+
+            committed = true;
+            return true;
         } catch (Throwable t) {
-            spawnError = t;
-        }
-
-        if (!added) {
-            unsuppressRestoredEntity(painting.getUUID());
-            painting.removeTag(RESTORED_TAG);
-
-            // Discard partial entity if it was partially inserted into the level
-            if (serverLevel.getEntity(painting.getUUID()) != null) {
-                painting.discard();
-            }
-
-            boolean rollbackSuccess = rollbackRestoration(serverLevel, footprint, anchorPos, originalStates, variant);
-            if (!rollbackSuccess) {
-                if (spawnError != null) {
-                    throw new RestorationException("Restoration rollback verification failed after spawn error", spawnError);
-                } else {
-                    throw new RestorationException("Restoration rollback verification failed: footprint could not be restored to original states at " + anchorPos);
-                }
-            }
-
-            if (spawnError != null) {
-                if (spawnError instanceof RuntimeException re) {
-                    throw re;
-                } else if (spawnError instanceof Error err) {
-                    throw err;
-                } else {
-                    throw new RuntimeException("Entity spawner failed", spawnError);
-                }
-            }
-
+            failure = t;
             return false;
-        }
+        } finally {
+            if (!committed) {
+                // Reconcile and discard attempted entity to prevent duplication
+                unsuppressRestoredEntity(painting.getUUID());
+                painting.removeTag(RESTORED_TAG);
+                if (serverLevel.getEntity(painting.getUUID()) != null || painting.isAlive()) {
+                    painting.discard();
+                }
 
-        return true;
+                // Rollback captured footprint and restore operational removal-guard state
+                Throwable rollbackError = null;
+                boolean rollbackSuccess = false;
+                try {
+                    rollbackSuccess = rollbackHandler.rollback(serverLevel, footprint, anchorPos, originalStates, variant);
+                } catch (Throwable rb) {
+                    rollbackError = rb;
+                }
+
+                // Reset removal guard on anchor BE if it exists in the level
+                if (serverLevel.getBlockEntity(anchorPos) instanceof PaintingBlockEntity restoredBe) {
+                    restoredBe.setRemoving(false);
+                }
+
+                if (!rollbackSuccess || rollbackError != null) {
+                    RestorationException rex = new RestorationException(
+                            "Restoration rollback verification failed: footprint could not be restored to original states at " + anchorPos,
+                            rollbackError != null ? rollbackError : failure
+                    );
+                    if (failure != null && rollbackError != null) {
+                        rex.addSuppressed(failure);
+                    }
+                    throw rex;
+                }
+
+                if (failure != null) {
+                    if (failure instanceof RuntimeException re) {
+                        throw re;
+                    } else if (failure instanceof Error err) {
+                        throw err;
+                    } else {
+                        throw new RuntimeException("Restoration failed", failure);
+                    }
+                }
+            }
+        }
     }
 
     private static boolean rollbackRestoration(
@@ -211,9 +273,10 @@ public final class PaintingConversionService {
         // 1. Restore anchor block first
         serverLevel.setBlock(anchorPos, originalStates.get(anchorPos), rollbackFlags);
 
-        // 2. Restore variant on anchor BE immediately so parts can resolve anchor
+        // 2. Restore variant on anchor BE immediately and reset removal guard
         if (serverLevel.getBlockEntity(anchorPos) instanceof PaintingBlockEntity restoredBe) {
             restoredBe.setVariant(variant);
+            restoredBe.setRemoving(false);
         } else {
             return false;
         }
@@ -230,7 +293,7 @@ public final class PaintingConversionService {
             serverLevel.updateNeighborsAt(pos, serverLevel.getBlockState(pos).getBlock());
         }
 
-        // 5. Verify postconditions (exact blocks, fluids, facing, BE variant, zero drops)
+        // 5. Verify postconditions (exact blocks, fluids, facing, BE variant, operational guard, zero drops)
         for (Map.Entry<BlockPos, BlockState> entry : originalStates.entrySet()) {
             BlockPos pos = entry.getKey();
             BlockState expected = entry.getValue();
@@ -247,6 +310,9 @@ public final class PaintingConversionService {
             return false;
         }
         if (verifiedBe.getFacing() != footprint.facing()) {
+            return false;
+        }
+        if (verifiedBe.isRemoving()) {
             return false;
         }
 
