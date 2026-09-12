@@ -17,6 +17,7 @@ import net.minecraft.world.level.LevelReader;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.material.PushReaction;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -271,5 +272,14 @@ public class PaintingPartBlockUnitTest {
         assertSame(PaintingPartBlock.AnchorLookupResult.Unloaded.INSTANCE, result,
                 "Expected Unloaded status without attempting reads into unloaded chunks");
         assertNull(PaintingPartBlock.findAnchorPos(level, partPos, partState));
+    }
+
+    @Test
+    @DisplayName("PaintingBlock and PaintingPartBlock configure PushReaction.POPPED for 26.3 compatibility")
+    void testPushReactionPopped() {
+        assertEquals(PushReaction.POPPED, ModRegistry.PAINTING_BLOCK.defaultBlockState().getPistonPushReaction(),
+                "PaintingBlock must declare PushReaction.POPPED");
+        assertEquals(PushReaction.POPPED, ModRegistry.PAINTING_PART_BLOCK.defaultBlockState().getPistonPushReaction(),
+                "PaintingPartBlock must declare PushReaction.POPPED");
     }
 }

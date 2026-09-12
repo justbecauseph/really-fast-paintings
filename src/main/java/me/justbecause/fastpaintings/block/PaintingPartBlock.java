@@ -1,6 +1,5 @@
 package me.justbecause.fastpaintings.block;
 
-import com.mojang.serialization.MapCodec;
 import me.justbecause.fastpaintings.block.entity.PaintingBlockEntity;
 import me.justbecause.fastpaintings.init.ModRegistry;
 import net.minecraft.core.BlockPos;
@@ -45,8 +44,6 @@ import org.jspecify.annotations.Nullable;
  */
 public class PaintingPartBlock extends HorizontalDirectionalBlock implements SimpleWaterloggedBlock {
 
-    public static final MapCodec<PaintingPartBlock> CODEC = simpleCodec(PaintingPartBlock::new);
-
     public static final EnumProperty<Direction> FACING = BlockStateProperties.HORIZONTAL_FACING;
     public static final BooleanProperty WATERLOGGED = BlockStateProperties.WATERLOGGED;
 
@@ -65,13 +62,8 @@ public class PaintingPartBlock extends HorizontalDirectionalBlock implements Sim
                 .noOcclusion()
                 .instabreak()
                 .sound(SoundType.WOOL)
-                .pushReaction(PushReaction.DESTROY)
+                .pushReaction(PushReaction.POPPED)
                 .isRedstoneConductor((state, level, pos) -> false));
-    }
-
-    @Override
-    protected MapCodec<? extends HorizontalDirectionalBlock> codec() {
-        return CODEC;
     }
 
     @Override
@@ -85,12 +77,12 @@ public class PaintingPartBlock extends HorizontalDirectionalBlock implements Sim
     }
 
     @Override
-    protected VoxelShape getCollisionShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
+    public VoxelShape getCollisionShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
         if (context instanceof EntityCollisionContext entityContext
                 && entityContext.getEntity() instanceof Projectile projectile) {
             if (level instanceof ServerLevel serverLevel
                     && projectile.mayInteract(serverLevel, pos)
-                    && projectile.mayBreak(serverLevel)) {
+                    && projectile.mayBreak(serverLevel, pos)) {
                 return this.getShape(state, level, pos, context);
             }
         }
@@ -208,11 +200,11 @@ public class PaintingPartBlock extends HorizontalDirectionalBlock implements Sim
     }
 
     @Override
-    protected void onProjectileHit(Level level, BlockState state, BlockHitResult hitResult, Projectile projectile) {
+    public void onProjectileHit(Level level, BlockState state, BlockHitResult hitResult, Projectile projectile) {
         BlockPos pos = hitResult.getBlockPos();
         if (level instanceof ServerLevel serverLevel
                 && projectile.mayInteract(serverLevel, pos)
-                && projectile.mayBreak(serverLevel)) {
+                && projectile.mayBreak(serverLevel, pos)) {
             AnchorLookupResult lookup = findAnchorLookup(level, pos, state);
             if (lookup instanceof AnchorLookupResult.Found found) {
                 if (level.getBlockEntity(found.pos()) instanceof PaintingBlockEntity be) {

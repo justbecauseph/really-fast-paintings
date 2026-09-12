@@ -154,4 +154,28 @@
     2. `PushReaction.DESTROY`: Enum constant renamed to `PushReaction.POPPED` (`PaintingBlock.java:71`, `PaintingPartBlock.java:68`).
     3. `Projectile.mayBreak`: Signature expanded to `mayBreak(ServerLevel, BlockPos)` (`PaintingBlock.java:110, 148`, `PaintingPartBlock.java:93, 215`).
   - Substantive code adaptations and runtime validation deferred to Phase 3.
-- **Review Gate Status:** Phase 2 correction complete. Moving to Phase 3.
+- **Review Gate Status:** Phase 2 approved. Phase 3 completed.
+
+---
+
+## Phase 3 — Common-side and Persistence Port (Minecraft 26.3-rc-2)
+
+- **Date:** September 13, 2026
+- **Port Branch:** `port/minecraft-26.3`
+- **Goal:** Adapt painting placement, persistence, collision, and destruction for Minecraft 26.3-rc-2 without changing core behavior; retain DD compileOnly; verify via unit tests and GameTests.
+- **Completed Adaptations:**
+  - **Block Codec Removal:** Removed deprecated static `CODEC` and `@Override protected MapCodec codec()` from `PaintingBlock.java` and `PaintingPartBlock.java` following Mojang's removal of `simpleCodec` / `Block.codec()`.
+  - **PushReaction Invariant:** Updated block definition push reactions from `PushReaction.DESTROY` to `PushReaction.POPPED` in `PaintingBlock.java` and `PaintingPartBlock.java`.
+  - **Projectile mayBreak Signature:** Updated all 4 call sites in `PaintingBlock.java` (`getCollisionShape`, `onProjectileHit`) and `PaintingPartBlock.java` (`getCollisionShape`, `onProjectileHit`) to pass the local block position to `projectile.mayBreak(serverLevel, pos)`. Made `getCollisionShape` and `onProjectileHit` public to enable rigorous automated testing.
+  - **Client Renderer Rotations:** Adapted `FastPaintingDistantDecorationRenderer.java` and `PaintingBlockRenderer.java` from `poseStack.mulPose(Axis.YP.rotationDegrees(...))` to `poseStack.rotateDegrees(Axis.YP, ...)`.
+  - **Dependency Normalization:** Set `minecraft_dependency=26.3-rc.2` in `gradle.properties` matching Fabric Loader's normalized SemVer scheme, resolving loader dependency validation.
+- **Automated Verification:**
+  - `./gradlew verifyMetadata`: PASS (4 checks, zero unresolved placeholders, strict version acceptance/rejection).
+  - `./gradlew test`: PASS (10 unit test suites, including `PaintingPartBlockUnitTest.testPushReactionPopped`).
+  - `./gradlew runGameTest`: PASS (All 26 GameTests passing in 1.2-1.4s), including 3 new focused tests:
+    1. `testPistonPopsAnchorBlock`: Verifies piston extension directly pops a 1x1 anchor block (`PushReaction.POPPED`) and drops the painting item.
+    2. `testPistonPopsHelperPartAndCleansFootprint`: Verifies piston extension pops a helper part block, which triggers `affectNeighborsAfterRemoval` to pop and clean the full 2x2 footprint and drop the item.
+    3. `testProjectileAllowedAndDeniedImpactOnAnchorAndPart`: Verifies allowed/denied projectile behavior and local position checks:
+       - Denied (`GameRules.PROJECTILES_CAN_BREAK_BLOCKS = false`): `mayBreak` is false, collision shapes are empty (pass-through), hits on anchor and helper parts do not break the painting.
+       - Allowed (`GameRules.PROJECTILES_CAN_BREAK_BLOCKS = true`): `mayBreak` is true, collision shapes are solid, hits on helper parts cleanly remove the whole footprint with item drop, and direct hits on anchors destroy the anchor with item drop.
+- **Review Gate Status:** Phase 3 implementation complete and validated. Ready for Phase 3 review sign-off before starting Phase 4 (Client rendering pipeline port).

@@ -30,7 +30,15 @@ import net.minecraft.world.phys.AABB;
 
 import me.justbecause.fastpaintings.command.PaintingMigrationCommand;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.entity.EntityTypes;
+import net.minecraft.world.entity.projectile.arrow.Arrow;
+import net.minecraft.world.level.block.piston.PistonBaseBlock;
 import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.gamerules.GameRules;
+import net.minecraft.world.level.material.PushReaction;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.CollisionContext;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -1109,6 +1117,195 @@ public class FastPaintingsGameTests {
 
         // Cleanup
         helper.setBlock(relativeAnchor, Blocks.AIR);
+
+        helper.succeed();
+    }
+
+    @GameTest
+    public void testPistonPopsAnchorBlock(GameTestHelper helper) {
+        BlockPos wallPos = new BlockPos(2, 2, 2);
+        BlockPos paintingPos = new BlockPos(2, 2, 3);
+        BlockPos pistonPos = new BlockPos(2, 2, 4);
+        BlockPos powerPos = new BlockPos(2, 3, 4);
+
+        helper.setBlock(wallPos, Blocks.STONE);
+        helper.setBlock(paintingPos, Blocks.AIR);
+
+        ServerLevel level = helper.getLevel();
+        Holder<PaintingVariant> kebab = level.registryAccess().lookupOrThrow(Registries.PAINTING_VARIANT)
+                .getOrThrow(PaintingVariants.KEBAB);
+
+        boolean placed = PaintingPlacementService.tryPlacePainting(
+                level, helper.absolutePos(paintingPos), Direction.SOUTH, kebab, null, level.getRandom()
+        );
+        helper.assertTrue(placed, "Failed to place 1x1 kebab painting");
+
+        BlockState anchorState = helper.getBlockState(paintingPos);
+        helper.assertTrue(anchorState.is(ModRegistry.PAINTING_BLOCK), "Anchor block was not placed");
+        helper.assertTrue(anchorState.getPistonPushReaction() == PushReaction.POPPED,
+                "Anchor block push reaction must be POPPED");
+
+        // Place piston facing NORTH towards the painting
+        helper.setBlock(pistonPos, Blocks.PISTON.defaultBlockState().setValue(PistonBaseBlock.FACING, Direction.NORTH));
+        helper.setBlock(powerPos, Blocks.REDSTONE_BLOCK);
+
+        helper.runAfterDelay(5, () -> {
+            BlockState currentState = helper.getBlockState(paintingPos);
+            helper.assertTrue(!currentState.is(ModRegistry.PAINTING_BLOCK),
+                    "Anchor block should be popped and removed by piston extension");
+            helper.assertItemEntityPresent(Items.PAINTING, paintingPos, 2.0);
+            helper.succeed();
+        });
+    }
+
+    @GameTest
+    public void testPistonPopsHelperPartAndCleansFootprint(GameTestHelper helper) {
+        // 3x3 stone wall
+        for (int x = 1; x <= 3; x++) {
+            for (int y = 1; y <= 3; y++) {
+                helper.setBlock(new BlockPos(x, y, 2), Blocks.STONE);
+                helper.setBlock(new BlockPos(x, y, 3), Blocks.AIR);
+            }
+        }
+
+        BlockPos anchorPos = new BlockPos(2, 2, 3);
+        BlockPos helperPartPos = new BlockPos(3, 2, 3);
+        BlockPos pistonPos = new BlockPos(3, 2, 4);
+        BlockPos powerPos = new BlockPos(3, 3, 4);
+
+        ServerLevel level = helper.getLevel();
+        Holder<PaintingVariant> match = level.registryAccess().lookupOrThrow(Registries.PAINTING_VARIANT)
+                .getOrThrow(PaintingVariants.MATCH); // 2x2
+
+        boolean placed = PaintingPlacementService.tryPlacePainting(
+                level, helper.absolutePos(anchorPos), Direction.SOUTH, match, null, level.getRandom()
+        );
+        helper.assertTrue(placed, "Failed to place 2x2 match painting");
+
+        BlockState partState = helper.getBlockState(helperPartPos);
+        helper.assertTrue(partState.is(ModRegistry.PAINTING_PART_BLOCK), "Helper part block missing at (3, 2, 3)");
+        helper.assertTrue(partState.getPistonPushReaction() == PushReaction.POPPED,
+                "Helper part block push reaction must be POPPED");
+
+        // Place piston facing NORTH towards the helper part
+        helper.setBlock(pistonPos, Blocks.PISTON.defaultBlockState().setValue(PistonBaseBlock.FACING, Direction.NORTH));
+        helper.setBlock(powerPos, Blocks.REDSTONE_BLOCK);
+
+        helper.runAfterDelay(5, () -> {
+            BlockState currentPart = helper.getBlockState(helperPartPos);
+            helper.assertTrue(!currentPart.is(ModRegistry.PAINTING_PART_BLOCK),
+                    "Helper part should be popped by piston");
+
+            BlockState currentAnchor = helper.getBlockState(anchorPos);
+            helper.assertTrue(!currentAnchor.is(ModRegistry.PAINTING_BLOCK),
+                    "Anchor block should also be removed via affectNeighborsAfterRemoval when helper part is popped");
+
+            helper.assertItemEntityPresent(Items.PAINTING, anchorPos, 3.0);
+            helper.succeed();
+        });
+    }
+
+    @GameTest
+    public void testProjectileAllowedAndDeniedImpactOnAnchorAndPart(GameTestHelper helper) {
+        // Build 3x3 stone wall
+        for (int x = 1; x <= 3; x++) {
+            for (int y = 1; y <= 3; y++) {
+                helper.setBlock(new BlockPos(x, y, 2), Blocks.STONE);
+                helper.setBlock(new BlockPos(x, y, 3), Blocks.AIR);
+            }
+        }
+
+        BlockPos relAnchor = new BlockPos(2, 2, 3);
+        BlockPos relPart = new BlockPos(3, 2, 3);
+        BlockPos absAnchor = helper.absolutePos(relAnchor);
+        BlockPos absPart = helper.absolutePos(relPart);
+
+        ServerLevel level = helper.getLevel();
+        Holder<PaintingVariant> match = level.registryAccess().lookupOrThrow(Registries.PAINTING_VARIANT)
+                .getOrThrow(PaintingVariants.MATCH); // 2x2
+
+        boolean placed = PaintingPlacementService.tryPlacePainting(
+                level, absAnchor, Direction.SOUTH, match, null, level.getRandom()
+        );
+        helper.assertTrue(placed, "Failed to place 2x2 match painting");
+
+        Arrow arrow = new Arrow(EntityTypes.ARROW, level);
+
+        // --- PART 1: DENIED IMPACT (GameRule projectilesCanBreakBlocks = false) ---
+        boolean prevRule = level.getGameRules().get(GameRules.PROJECTILES_CAN_BREAK_BLOCKS);
+        level.getGameRules().set(GameRules.PROJECTILES_CAN_BREAK_BLOCKS, false, level.getServer());
+        try {
+            // Check mayBreak on exact queried positions
+            helper.assertFalse(arrow.mayBreak(level, absAnchor),
+                    "arrow.mayBreak must return false on anchor when gamerule is disabled");
+            helper.assertFalse(arrow.mayBreak(level, absPart),
+                    "arrow.mayBreak must return false on part when gamerule is disabled");
+
+            // Collision shape should be empty when mayBreak is false (projectile passes through without colliding)
+            BlockState anchorState = helper.getBlockState(relAnchor);
+            BlockState partState = helper.getBlockState(relPart);
+            helper.assertTrue(anchorState.getCollisionShape(level, absAnchor, CollisionContext.of(arrow)).isEmpty(),
+                    "Anchor collision shape must be empty when projectile cannot break blocks");
+            helper.assertTrue(partState.getCollisionShape(level, absPart, CollisionContext.of(arrow)).isEmpty(),
+                    "Helper part collision shape must be empty when projectile cannot break blocks");
+
+            // Denied projectile hit on part: must NOT remove footprint
+            BlockHitResult partHit = new BlockHitResult(Vec3.atCenterOf(absPart), Direction.SOUTH, absPart, false);
+            ModRegistry.PAINTING_PART_BLOCK.onProjectileHit(level, partState, partHit, arrow);
+            helper.assertTrue(helper.getBlockState(relPart).is(ModRegistry.PAINTING_PART_BLOCK),
+                    "Helper part must remain intact when projectile mayBreak is false");
+            helper.assertTrue(helper.getBlockState(relAnchor).is(ModRegistry.PAINTING_BLOCK),
+                    "Anchor must remain intact when projectile mayBreak is false");
+
+            // Denied projectile hit on anchor: must NOT remove footprint
+            BlockHitResult anchorHit = new BlockHitResult(Vec3.atCenterOf(absAnchor), Direction.SOUTH, absAnchor, false);
+            ModRegistry.PAINTING_BLOCK.onProjectileHit(level, anchorState, anchorHit, arrow);
+            helper.assertTrue(helper.getBlockState(relAnchor).is(ModRegistry.PAINTING_BLOCK),
+                    "Anchor must remain intact after denied projectile hit on anchor");
+        } finally {
+            level.getGameRules().set(GameRules.PROJECTILES_CAN_BREAK_BLOCKS, prevRule, level.getServer());
+        }
+
+        // --- PART 2: ALLOWED IMPACT ON HELPER PART (GameRule projectilesCanBreakBlocks = true) ---
+        helper.assertTrue(arrow.mayBreak(level, absPart),
+                "arrow.mayBreak must return true on part when gamerule is enabled");
+        helper.assertTrue(arrow.mayBreak(level, absAnchor),
+                "arrow.mayBreak must return true on anchor when gamerule is enabled");
+
+        // Collision shape should be non-empty (solid to projectile) when mayBreak is true
+        BlockState partStateAllowed = helper.getBlockState(relPart);
+        helper.assertFalse(partStateAllowed.getCollisionShape(level, absPart, CollisionContext.of(arrow)).isEmpty(),
+                "Helper part collision shape must be non-empty when projectile can break blocks");
+
+        // Allowed projectile hit on helper part: must remove entire footprint
+        BlockHitResult partHitAllowed = new BlockHitResult(Vec3.atCenterOf(absPart), Direction.SOUTH, absPart, false);
+        ModRegistry.PAINTING_PART_BLOCK.onProjectileHit(level, partStateAllowed, partHitAllowed, arrow);
+
+        helper.assertTrue(!helper.getBlockState(relPart).is(ModRegistry.PAINTING_PART_BLOCK),
+                "Helper part must be removed when hit by allowed projectile");
+        helper.assertTrue(!helper.getBlockState(relAnchor).is(ModRegistry.PAINTING_BLOCK),
+                "Anchor must be removed when helper part is hit by allowed projectile");
+
+        // Verify item drop
+        helper.assertItemEntityPresent(Items.PAINTING, relAnchor, 3.0);
+
+        // --- PART 3: ALLOWED IMPACT DIRECTLY ON ANCHOR ---
+        Holder<PaintingVariant> kebab = level.registryAccess().lookupOrThrow(Registries.PAINTING_VARIANT)
+                .getOrThrow(PaintingVariants.KEBAB);
+        boolean placed1x1 = PaintingPlacementService.tryPlacePainting(
+                level, absAnchor, Direction.SOUTH, kebab, null, level.getRandom()
+        );
+        helper.assertTrue(placed1x1, "Failed to place 1x1 kebab painting for allowed anchor impact test");
+
+        BlockState anchor1x1 = helper.getBlockState(relAnchor);
+        helper.assertFalse(anchor1x1.getCollisionShape(level, absAnchor, CollisionContext.of(arrow)).isEmpty(),
+                "Anchor collision shape must be non-empty when projectile can break blocks");
+
+        BlockHitResult anchorHitAllowed = new BlockHitResult(Vec3.atCenterOf(absAnchor), Direction.SOUTH, absAnchor, false);
+        ModRegistry.PAINTING_BLOCK.onProjectileHit(level, anchor1x1, anchorHitAllowed, arrow);
+
+        helper.assertTrue(helper.getBlockState(relAnchor).isAir(),
+                "Anchor must be removed when directly hit by allowed projectile");
 
         helper.succeed();
     }

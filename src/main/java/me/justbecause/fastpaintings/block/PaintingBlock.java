@@ -1,6 +1,5 @@
 package me.justbecause.fastpaintings.block;
 
-import com.mojang.serialization.MapCodec;
 import me.justbecause.fastpaintings.block.entity.PaintingBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -43,8 +42,6 @@ import org.jspecify.annotations.Nullable;
 
 public class PaintingBlock extends HorizontalDirectionalBlock implements EntityBlock, SimpleWaterloggedBlock {
 
-    public static final MapCodec<PaintingBlock> CODEC = simpleCodec(PaintingBlock::new);
-
     public static final EnumProperty<Direction> FACING = BlockStateProperties.HORIZONTAL_FACING;
     public static final BooleanProperty WATERLOGGED = BlockStateProperties.WATERLOGGED;
 
@@ -68,13 +65,8 @@ public class PaintingBlock extends HorizontalDirectionalBlock implements EntityB
                 .noOcclusion()
                 .instabreak()
                 .sound(SoundType.WOOL)
-                .pushReaction(PushReaction.DESTROY)
+                .pushReaction(PushReaction.POPPED)
                 .isRedstoneConductor((state, level, pos) -> false));
-    }
-
-    @Override
-    protected MapCodec<? extends HorizontalDirectionalBlock> codec() {
-        return CODEC;
     }
 
     @Override
@@ -102,12 +94,12 @@ public class PaintingBlock extends HorizontalDirectionalBlock implements EntityB
     }
 
     @Override
-    protected VoxelShape getCollisionShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
+    public VoxelShape getCollisionShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
         if (context instanceof EntityCollisionContext entityContext
                 && entityContext.getEntity() instanceof Projectile projectile) {
             if (level instanceof ServerLevel serverLevel
                     && projectile.mayInteract(serverLevel, pos)
-                    && projectile.mayBreak(serverLevel)) {
+                    && projectile.mayBreak(serverLevel, pos)) {
                 return this.getShape(state, level, pos, context);
             }
         }
@@ -141,11 +133,11 @@ public class PaintingBlock extends HorizontalDirectionalBlock implements EntityB
     }
 
     @Override
-    protected void onProjectileHit(Level level, BlockState state, BlockHitResult hitResult, Projectile projectile) {
+    public void onProjectileHit(Level level, BlockState state, BlockHitResult hitResult, Projectile projectile) {
         BlockPos pos = hitResult.getBlockPos();
         if (level instanceof ServerLevel serverLevel
                 && projectile.mayInteract(serverLevel, pos)
-                && projectile.mayBreak(serverLevel)) {
+                && projectile.mayBreak(serverLevel, pos)) {
             if (level.getBlockEntity(pos) instanceof PaintingBlockEntity be) {
                 be.removeFootprint(level, true, projectile);
             }

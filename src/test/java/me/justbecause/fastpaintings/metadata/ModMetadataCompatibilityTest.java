@@ -65,26 +65,26 @@ public class ModMetadataCompatibilityTest {
     }
 
     @Test
-    @DisplayName("Minecraft version predicate from processed metadata strictly accepts 26.3-rc-2 and rejects other versions")
+    @DisplayName("Minecraft version predicate from processed metadata strictly accepts 26.3-rc.2 and rejects other versions")
     public void testMinecraftVersionPredicate() throws IOException, VersionParsingException {
         String json = readMetadataContent();
         String mcPredicateStr = extractJsonField(json, "minecraft");
-        assertEquals("26.3-rc-2", mcPredicateStr, "Expanded minecraft dependency must be '26.3-rc-2'");
+        assertEquals("26.3-rc.2", mcPredicateStr, "Expanded minecraft dependency must be '26.3-rc.2'");
 
         VersionPredicate predicate = VersionPredicate.parse(mcPredicateStr);
 
         // Target RC version MUST be accepted
-        Version targetRc = Version.parse("26.3-rc-2");
-        assertTrue(predicate.test(targetRc), "Target 26.3-rc-2 must be accepted");
+        Version targetRc = Version.parse("26.3-rc.2");
+        assertTrue(predicate.test(targetRc), "Target 26.3-rc.2 must be accepted");
 
         // Older versions MUST be rejected
         assertFalse(predicate.test(Version.parse("26.2")), "Baseline 26.2 must be rejected");
         assertFalse(predicate.test(Version.parse("26.1")), "Older 26.1 must be rejected");
 
         // Other pre-releases / RCs MUST be rejected
-        assertFalse(predicate.test(Version.parse("26.3-rc-1")), "Older 26.3-rc-1 must be rejected");
-        assertFalse(predicate.test(Version.parse("26.3-rc-3")), "Different 26.3-rc-3 must be rejected");
-        assertFalse(predicate.test(Version.parse("26.3-pre-3")), "26.3-pre-3 must be rejected");
+        assertFalse(predicate.test(Version.parse("26.3-rc.1")), "Older 26.3-rc.1 must be rejected");
+        assertFalse(predicate.test(Version.parse("26.3-rc.3")), "Different 26.3-rc.3 must be rejected");
+        assertFalse(predicate.test(Version.parse("26.3-pre.3")), "26.3-pre-3 must be rejected");
 
         // Final 26.3 release MUST be rejected until port is explicitly updated and tested for final
         assertFalse(predicate.test(Version.parse("26.3")), "Final 26.3 must be rejected by RC-2 specific predicate");

@@ -72,7 +72,7 @@ public class FastPaintingDistantDecorationRenderer implements DecorationClientRe
         poseStack.translate(0.5, 0.5, 0.5);
 
         Direction facing = data.direction();
-        poseStack.mulPose(Axis.YP.rotationDegrees(180.0F - facing.get2DDataValue() * 90.0F));
+        poseStack.rotateDegrees(Axis.YP, 180.0F - facing.get2DDataValue() * 90.0F);
 
         int width = data.width();
         int height = data.height();

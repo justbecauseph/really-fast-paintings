@@ -223,7 +223,7 @@ public class PaintingBlockRenderer implements BlockEntityRenderer<PaintingBlockE
 
             poseStack.pushPose();
             poseStack.translate(0.5, 0.5, 0.5);
-            poseStack.mulPose(Axis.YP.rotationDegrees(180 - state.direction.get2DDataValue() * 90));
+            poseStack.rotateDegrees(Axis.YP, 180 - state.direction.get2DDataValue() * 90);
             poseStack.translate(horizontalOffset, verticalOffset, 0.46875);
 
             TextureAtlasSprite frontSprite = this.paintingsAtlas.getSprite(variant.assetId());
