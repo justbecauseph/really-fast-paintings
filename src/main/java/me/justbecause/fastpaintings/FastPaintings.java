@@ -17,7 +17,11 @@ public class FastPaintings implements ModInitializer {
 
     @Override
     public void onInitialize() {
-        LOGGER.info("Initializing Really Fast Paintings for Minecraft 26.2...");
+        String version = net.fabricmc.loader.api.FabricLoader.getInstance()
+                .getModContainer(MOD_ID)
+                .map(c -> c.getMetadata().getVersion().getFriendlyString())
+                .orElse("unknown");
+        LOGGER.info("Initializing Really Fast Paintings v{}...", version);
         CONFIG = FastPaintingsConfig.load();
         ModRegistry.init();
         PaintingEntityHandler.init();

@@ -72,11 +72,22 @@ test {
 
 processResources {
     def version = project.version
+    def minecraftDependency = project.minecraft_dependency
+    def loaderVersion = project.loader_version
+    def fabricApiDependency = project.fabric_api_dependency
 
     inputs.property "version", version
+    inputs.property "minecraft_dependency", minecraftDependency
+    inputs.property "loader_version", loaderVersion
+    inputs.property "fabric_api_dependency", fabricApiDependency
 
     filesMatching("fabric.mod.json") {
-        expand "version": version
+        expand(
+            "version": version,
+            "minecraft_dependency": minecraftDependency,
+            "loader_version": loaderVersion,
+            "fabric_api_dependency": fabricApiDependency
+        )
     }
 }
 
@@ -102,9 +113,9 @@ modrinth {
 
     versionNumber = project.version.toString()
     versionName = "Really Fast Paintings ${project.version}"
-    versionType = System.getenv("MODRINTH_VERSION_TYPE") ?: "release"
+    versionType = System.getenv("MODRINTH_VERSION_TYPE") ?: (project.version.toString().contains("-") ? "beta" : "release")
 
-    // Minecraft 26.2 uses the unobfuscated Loom plugin; the normal jar is the distributable artifact.
+    // Minecraft 26.x uses the unobfuscated Loom plugin; the normal jar is the distributable artifact.
     uploadFile = tasks.jar
 
     gameVersions = [
