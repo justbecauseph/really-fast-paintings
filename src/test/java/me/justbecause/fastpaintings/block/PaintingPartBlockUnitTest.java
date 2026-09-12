@@ -12,6 +12,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.Bootstrap;
 import net.minecraft.world.entity.decoration.painting.PaintingVariant;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.LevelReader;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -60,7 +61,7 @@ public class PaintingPartBlockUnitTest {
     private static LevelReader createStubLevel(
             Map<BlockPos, BlockState> blockStates,
             Map<BlockPos, BlockEntity> blockEntities,
-            Set<BlockPos> unloadedPositions
+            Set<ChunkPos> unloadedChunks
     ) {
         return (LevelReader) Proxy.newProxyInstance(
                 LevelReader.class.getClassLoader(),
@@ -77,14 +78,25 @@ public class PaintingPartBlockUnitTest {
                     }
                     if (name.equals("hasChunkAt") || name.equals("isLoaded")) {
                         BlockPos pos = (BlockPos) args[0];
-                        return !unloadedPositions.contains(pos);
+                        return !unloadedChunks.contains(ChunkPos.containing(pos));
+                    }
+                    if (name.equals("hasChunk") && args.length == 2 && args[0] instanceof Integer cx && args[1] instanceof Integer cz) {
+                        return !unloadedChunks.contains(new ChunkPos(cx, cz));
                     }
                     if (name.equals("getBlockState")) {
                         BlockPos pos = (BlockPos) args[0];
+                        ChunkPos cp = ChunkPos.containing(pos);
+                        if (unloadedChunks.contains(cp)) {
+                            throw new AssertionError("Violated unloaded chunk contract: attempted to read blockState at " + pos + " in unloaded chunk " + cp);
+                        }
                         return blockStates.getOrDefault(pos, Blocks.AIR.defaultBlockState());
                     }
                     if (name.equals("getBlockEntity")) {
                         BlockPos pos = (BlockPos) args[0];
+                        ChunkPos cp = ChunkPos.containing(pos);
+                        if (unloadedChunks.contains(cp)) {
+                            throw new AssertionError("Violated unloaded chunk contract: attempted to read blockEntity at " + pos + " in unloaded chunk " + cp);
+                        }
                         return blockEntities.get(pos);
                     }
                     if (method.isDefault()) {
@@ -205,11 +217,11 @@ public class PaintingPartBlockUnitTest {
         BlockPos partPos = new BlockPos(100, 64, 100);
         BlockState partState = ModRegistry.PAINTING_PART_BLOCK.defaultBlockState().setValue(PaintingPartBlock.FACING, facing);
 
-        // Mark candidate position as unloaded
-        Set<BlockPos> unloaded = new HashSet<>();
-        unloaded.add(new BlockPos(99, 64, 100)); // adjacent candidate is unloaded
+        // Candidate at X=112 is in chunk (7, 6) while partPos (100, 64, 100) is in chunk (6, 6)
+        BlockPos adjacentCandidatePos = new BlockPos(112, 64, 100);
+        ChunkPos unloadedChunk = ChunkPos.containing(adjacentCandidatePos);
 
-        LevelReader level = createStubLevel(Map.of(), Map.of(), unloaded);
+        LevelReader level = createStubLevel(Map.of(), Map.of(), Set.of(unloadedChunk));
 
         PaintingPartBlock.AnchorLookupResult result = PaintingPartBlock.findAnchorLookup(level, partPos, partState);
         assertSame(PaintingPartBlock.AnchorLookupResult.Unloaded.INSTANCE, result,

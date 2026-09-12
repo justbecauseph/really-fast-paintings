@@ -48,8 +48,21 @@ public final class PaintingConversionService {
     }
 
     public static boolean tryConvert(Painting painting, ServerLevel serverLevel) {
-        if (!painting.isAlive() || isRestorationSuppressed(painting)) {
+        return tryConvert(painting, serverLevel, false);
+    }
+
+    public static boolean tryConvert(Painting painting, ServerLevel serverLevel, boolean allowSuppressedOverride) {
+        if (!painting.isAlive()) {
             return false;
+        }
+
+        if (isRestorationSuppressed(painting)) {
+            if (allowSuppressedOverride) {
+                painting.removeTag(RESTORED_TAG);
+                unsuppressRestoredEntity(painting.getUUID());
+            } else {
+                return false;
+            }
         }
 
         // Parity check: skip if entity has special custom data and config requests skipping
@@ -144,32 +157,96 @@ public final class PaintingConversionService {
         blockEntity.removeFootprint(serverLevel, false, null);
 
         // Attempt to spawn the vanilla entity
-        boolean added = entitySpawner.test(painting);
+        boolean added = false;
+        Throwable spawnError = null;
+        try {
+            added = entitySpawner.test(painting);
+        } catch (Throwable t) {
+            spawnError = t;
+        }
+
         if (!added) {
             unsuppressRestoredEntity(painting.getUUID());
+            painting.removeTag(RESTORED_TAG);
 
-            int rollbackFlags = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE;
-
-            // 1. Restore anchor block first
-            serverLevel.setBlock(anchorPos, originalStates.get(anchorPos), rollbackFlags);
-
-            // 2. Restore variant on anchor BE immediately so parts can resolve anchor
-            if (serverLevel.getBlockEntity(anchorPos) instanceof PaintingBlockEntity restoredBe) {
-                restoredBe.setVariant(variant);
+            // Discard partial entity if it was partially inserted into the level
+            if (serverLevel.getEntity(painting.getUUID()) != null) {
+                painting.discard();
             }
 
-            // 3. Restore part blocks
-            for (Map.Entry<BlockPos, BlockState> entry : originalStates.entrySet()) {
-                if (!entry.getKey().equals(anchorPos)) {
-                    serverLevel.setBlock(entry.getKey(), entry.getValue(), rollbackFlags);
+            boolean rollbackSuccess = rollbackRestoration(serverLevel, footprint, anchorPos, originalStates, variant);
+            if (!rollbackSuccess) {
+                if (spawnError != null) {
+                    throw new RestorationException("Restoration rollback verification failed after spawn error", spawnError);
+                } else {
+                    throw new RestorationException("Restoration rollback verification failed: footprint could not be restored to original states at " + anchorPos);
                 }
             }
 
-            // 4. Notify neighbors after entire footprint is restored
-            for (BlockPos pos : footprint.occupiedCells()) {
-                serverLevel.updateNeighborsAt(pos, serverLevel.getBlockState(pos).getBlock());
+            if (spawnError != null) {
+                if (spawnError instanceof RuntimeException re) {
+                    throw re;
+                } else if (spawnError instanceof Error err) {
+                    throw err;
+                } else {
+                    throw new RuntimeException("Entity spawner failed", spawnError);
+                }
             }
 
+            return false;
+        }
+
+        return true;
+    }
+
+    private static boolean rollbackRestoration(
+            ServerLevel serverLevel,
+            PaintingFootprint footprint,
+            BlockPos anchorPos,
+            Map<BlockPos, BlockState> originalStates,
+            Holder<PaintingVariant> variant
+    ) {
+        int rollbackFlags = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE;
+
+        // 1. Restore anchor block first
+        serverLevel.setBlock(anchorPos, originalStates.get(anchorPos), rollbackFlags);
+
+        // 2. Restore variant on anchor BE immediately so parts can resolve anchor
+        if (serverLevel.getBlockEntity(anchorPos) instanceof PaintingBlockEntity restoredBe) {
+            restoredBe.setVariant(variant);
+        } else {
+            return false;
+        }
+
+        // 3. Restore part blocks
+        for (Map.Entry<BlockPos, BlockState> entry : originalStates.entrySet()) {
+            if (!entry.getKey().equals(anchorPos)) {
+                serverLevel.setBlock(entry.getKey(), entry.getValue(), rollbackFlags);
+            }
+        }
+
+        // 4. Notify neighbors after entire footprint is restored
+        for (BlockPos pos : footprint.occupiedCells()) {
+            serverLevel.updateNeighborsAt(pos, serverLevel.getBlockState(pos).getBlock());
+        }
+
+        // 5. Verify postconditions (exact blocks, fluids, facing, BE variant, zero drops)
+        for (Map.Entry<BlockPos, BlockState> entry : originalStates.entrySet()) {
+            BlockPos pos = entry.getKey();
+            BlockState expected = entry.getValue();
+            BlockState actual = serverLevel.getBlockState(pos);
+            if (!actual.equals(expected)) {
+                return false;
+            }
+        }
+
+        if (!(serverLevel.getBlockEntity(anchorPos) instanceof PaintingBlockEntity verifiedBe)) {
+            return false;
+        }
+        if (!variant.equals(verifiedBe.getVariant())) {
+            return false;
+        }
+        if (verifiedBe.getFacing() != footprint.facing()) {
             return false;
         }
 

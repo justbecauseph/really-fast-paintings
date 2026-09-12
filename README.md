@@ -87,21 +87,31 @@ config/fastpaintings.json
 
 All Really Fast Paintings commands require gamemaster-level command permission.
 
+> [!IMPORTANT]
+> **Command Scope:** All `/fastpaintings` commands (`stats`, `convert`, `restore`) inspect and operate **only on currently loaded chunks around active players** (or spawn chunks if no players are online). They **do not** scan offline region files, unloaded chunks, or unvisited dimensions. To migrate or inspect an entire world, operators or players must visit all areas containing paintings while chunks are loaded.
+
 - `/fastpaintings stats`
-  - Displays the total number of currently loaded vanilla painting entities across all worlds.
+  - Displays the total number of currently loaded vanilla painting entities, block painting anchors, and multipart helper parts across loaded chunks.
 - `/fastpaintings convert`
-  - Attempts to convert currently loaded vanilla painting entities across all dimensions.
+  - Attempts to convert currently loaded vanilla painting entities across all dimensions to block-backed paintings (explicit execution overrides prior restoration suppression).
 - `/fastpaintings restore`
-  - Restores loaded block-backed paintings to vanilla `Painting` entities for migration or safe uninstallation.
+  - Restores loaded block-backed paintings back to vanilla `Painting` entities for migration or safe uninstallation.
 
 ### ⚠️ Safe Uninstallation Procedure
 
 To uninstall Really Fast Paintings cleanly from a world without losing placed paintings:
 
-1. In `config/fastpaintings.json`, set `"convertExistingPaintings": false` and `"convertCommandCreatedPaintings": false` and save the configuration.
-2. Load the world and run `/fastpaintings restore` across all areas where block-backed paintings exist. This restores them to vanilla `Painting` entities with persistent suppression markers.
-3. Verify via `/fastpaintings stats` that no unconverted block-backed paintings remain.
-4. Shut down the server/client and safely remove the Really Fast Paintings mod JAR.
+1. **Create a complete world backup** before making configuration changes or running restoration.
+2. In `config/fastpaintings.json`, persistently disable all automatic conversion and placement options:
+   ```json
+   "convertExistingPaintings": false,
+   "convertCommandCreatedPaintings": false,
+   "convertOnPlacement": false
+   ```
+   Save the file and start the server/client.
+3. Visit **all areas and dimensions** where block-backed paintings were placed. While players keep those chunks loaded, run `/fastpaintings restore`. Converted paintings are replaced with vanilla `Painting` entities marked with persistent suppression tags.
+4. Run `/fastpaintings stats` across all visited areas to verify that **0 block painting anchors** and **0 multipart helper parts** remain in loaded chunks.
+5. Shut down the server/client cleanly and safely remove the Really Fast Paintings mod JAR from the `mods/` directory.
 
 ---
 

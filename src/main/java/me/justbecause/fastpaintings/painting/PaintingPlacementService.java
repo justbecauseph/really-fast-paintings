@@ -30,6 +30,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Predicate;
 
 public final class PaintingPlacementService {
 
@@ -164,6 +165,17 @@ public final class PaintingPlacementService {
             @Nullable Player player,
             PlacementMode mode
     ) {
+        return placePaintingBlocksTransactional(level, footprint, variant, player, mode, null);
+    }
+
+    public static boolean placePaintingBlocksTransactional(
+            Level level,
+            PaintingFootprint footprint,
+            Holder<PaintingVariant> variant,
+            @Nullable Player player,
+            PlacementMode mode,
+            @Nullable Predicate<BlockPos> writeFailurePredicate
+    ) {
         BlockPos anchorPos = footprint.anchor();
         Direction facing = footprint.facing();
         int placementFlags = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE;
@@ -201,6 +213,9 @@ public final class PaintingPlacementService {
                 if (cellPos.equals(anchorPos)) {
                     continue;
                 }
+                if (writeFailurePredicate != null && writeFailurePredicate.test(cellPos)) {
+                    return false;
+                }
                 boolean isWaterlogged = level.getFluidState(cellPos).getType() == Fluids.WATER;
                 BlockState partState = ModRegistry.PAINTING_PART_BLOCK.defaultBlockState()
                         .setValue(PaintingPartBlock.FACING, facing)
@@ -215,6 +230,9 @@ public final class PaintingPlacementService {
         } finally {
             // 5. Rollback on failure
             if (!success) {
+                if (level.getBlockEntity(anchorPos) instanceof PaintingBlockEntity be) {
+                    be.setRemoving(true);
+                }
                 for (Map.Entry<BlockPos, BlockState> entry : originalStates.entrySet()) {
                     level.setBlock(entry.getKey(), entry.getValue(), Block.UPDATE_ALL | Block.UPDATE_SUPPRESS_DROPS);
                 }

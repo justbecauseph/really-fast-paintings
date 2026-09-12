@@ -80,6 +80,14 @@ public class PaintingBlockEntity extends BlockEntity {
         }
     }
 
+    public boolean isRemoving() {
+        return this.isRemoving;
+    }
+
+    public void setRemoving(boolean removing) {
+        this.isRemoving = removing;
+    }
+
     public void markLightDirty() {
         this.lightDirty = true;
     }
