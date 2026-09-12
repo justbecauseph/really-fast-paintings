@@ -125,7 +125,7 @@
 - **Port Branch:** `port/minecraft-26.3`
 - **Target Dependency Tuple:**
   - Minecraft: `26.3-rc-2`
-  - Fabric Loader: `0.19.3`
+  - Fabric Loader: `0.19.5`
   - Fabric Loom: `1.17.20` (includes merged PR #1624 native crash fix)
   - Fabric API: `0.160.4+26.3`
   - Java: `Zulu 25.0.4`
@@ -133,23 +133,25 @@
   - Mod Version: `1.2.0-rc.2`
   - Optional Distant Decorations: `0.1.0` (compile-only, unchanged)
 - **Modified Toolchain & Metadata Files:**
-  - `gradle.properties`: Retargeted `minecraft_version` to `26.3-rc-2`, `loom_version` to `1.17.20`, `fabric_api_version` to `0.160.4+26.3`, and `mod_version` to `1.2.0-rc.2`.
-  - `build.gradle`: Configured property expansion for `minecraft_dependency`, `loader_version`, and `fabric_api_dependency` into `fabric.mod.json`; configured Modrinth version type to `beta` for prereleases.
-  - `src/main/resources/fabric.mod.json`: Updated dependency constraints to use expanded explicit properties (`minecraft: 26.3-rc-2`, `fabricloader: >=0.19.3`, `fabric-api: >=0.160.4`).
+  - `gradle.properties`: Retargeted `minecraft_version` to `26.3-rc-2`, `loader_version` to `0.19.5`, `loom_version` to `1.17.20`, `fabric_api_version` to `0.160.4+26.3`, and `mod_version` to `1.2.0-rc.2`.
+  - `build.gradle`: Configured property expansion for `minecraft_dependency`, `loader_version`, and `fabric_api_dependency` into `fabric.mod.json`; configured Modrinth version type to `beta` for prereleases; added isolated `verifyMetadata` execution task.
+  - `src/main/resources/fabric.mod.json`: Updated dependency constraints to use expanded explicit properties (`minecraft: 26.3-rc-2`, `fabricloader: >=0.19.5`, `fabric-api: >=0.160.4`).
   - `src/main/resources/fastpaintings.mixins.json`: Aligned `compatibilityLevel` to `JAVA_25`.
   - `src/main/java/me/justbecause/fastpaintings/FastPaintings.java`: Updated startup message to version-neutral dynamic version logging.
-  - `src/test/java/me/justbecause/fastpaintings/metadata/ModMetadataCompatibilityTest.java`: Added unit test validating Loader version predicate parser against target and rejection cases.
-  - `docs/porting/minecraft-26.3.md`: Created API-delta inventory table distinguishing confirmed breaks from unchanged APIs.
+  - `src/test/java/me/justbecause/fastpaintings/metadata/ModMetadataCompatibilityTest.java`: Added verification suite reading processed `fabric.mod.json`, validating zero unexpanded `${...}` placeholders, and testing predicate acceptance/rejection against target and edge versions.
+  - `docs/porting/minecraft-26.3.md`: Created API-delta inventory table distinguishing observed compiler breaks from inspected unchanged signatures.
 - **Source Generation:**
   - Executed `./gradlew genSources`: Decompiled common sources (`minecraft-common-6974b2190e-26.3-rc-2-sources.jar`, 5037 classes) and client sources (`minecraft-clientOnly-6974b2190e-26.3-rc-2-sources.jar`, 2264 classes) via Vineflower.
-- **Version Compatibility Verification:**
-  - `testMinecraftVersionPredicate`: PASS — strictly accepts `26.3-rc-2`, rejects `26.2`, `26.3-rc-1`, `26.3-pre-3`, `26.1`, `26.4`.
-  - `testLoaderVersionPredicate`: PASS — enforces `>=0.19.3`.
-  - `testFabricApiVersionPredicate`: PASS — enforces `>=0.160.4`.
-- **Target Compilation Assessment & API Blockers Captured:**
-  - Executed `./gradlew compileJava`: Captured 10 errors across 2 files, directly mapping to 3 confirmed API breaks:
+- **Metadata Verification (`./gradlew verifyMetadata`):**
+  - Task depends directly on `processResources` and compiles the test class using an isolated `metadataTestClasspath` without triggering common Minecraft compilation.
+  - `testMetadataIntegrity`: PASS — confirms mod ID `fastpaintings`, version `1.2.0-rc.2`, and zero unresolved placeholders in generated `fabric.mod.json`.
+  - `testMinecraftVersionPredicate`: PASS — strictly accepts `26.3-rc-2`; rejects `26.2`, `26.1`, `26.3-rc-1`, `26.3-rc-3`, `26.3-pre-3`, `26.3` (final release), and `26.4`.
+  - `testLoaderVersionPredicate`: PASS — enforces `>=0.19.5` (accepts `0.19.5`, `0.19.6`; rejects `0.19.4`, `0.19.3`, `0.18.4`).
+  - `testFabricApiVersionPredicate`: PASS — enforces `>=0.160.4` (accepts `0.160.4`, `0.160.5`; rejects `0.160.3`, `0.158.0`).
+- **Target Compilation Assessment & Observed Compiler Breaks:**
+  - Executed `./gradlew compileJava`: Captured 10 compiler errors across 2 files, directly mapping to 3 observed API breaks:
     1. `Block.CODEC` / `simpleCodec`: Removed from `Block` and `BlockBehaviour` in 26.3 (`PaintingBlock.java:46, 75`, `PaintingPartBlock.java:48, 72`).
     2. `PushReaction.DESTROY`: Enum constant renamed to `PushReaction.POPPED` (`PaintingBlock.java:71`, `PaintingPartBlock.java:68`).
     3. `Projectile.mayBreak`: Signature expanded to `mayBreak(ServerLevel, BlockPos)` (`PaintingBlock.java:110, 148`, `PaintingPartBlock.java:93, 215`).
-  - All other APIs (entity persistence, packets, conversion, footprint arithmetic, rendering pipeline, Mixin injection) confirmed unchanged.
-- **Review Gate Status:** Stopped at Phase 2 gate. Substantive code adaptations deferred to Phase 3.
+  - Substantive code adaptations and runtime validation deferred to Phase 3.
+- **Review Gate Status:** Phase 2 correction complete. Moving to Phase 3.

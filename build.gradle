@@ -91,6 +91,36 @@ processResources {
     }
 }
 
+configurations {
+    metadataTestClasspath {
+        canBeConsumed = false
+        canBeResolved = true
+    }
+}
+
+dependencies {
+    metadataTestClasspath "net.fabricmc:fabric-loader:${project.loader_version}"
+    metadataTestClasspath "org.junit.jupiter:junit-jupiter:5.11.4"
+    metadataTestClasspath "org.apiguardian:apiguardian-api:1.1.2"
+}
+
+def compileMetadataTestJava = tasks.register("compileMetadataTestJava", JavaCompile) {
+    source = fileTree("src/test/java/me/justbecause/fastpaintings/metadata")
+    classpath = configurations.metadataTestClasspath
+    destinationDirectory = layout.buildDirectory.dir("classes/java/metadataTest")
+    options.release = 25
+}
+
+tasks.register("verifyMetadata", JavaExec) {
+    dependsOn tasks.named("processResources"), compileMetadataTestJava
+    classpath = files(
+        compileMetadataTestJava.get().destinationDirectory,
+        configurations.metadataTestClasspath
+    )
+    mainClass = "me.justbecause.fastpaintings.metadata.ModMetadataCompatibilityTest"
+    systemProperty "fabric.mod.json.path", "${layout.buildDirectory.get()}/resources/main/fabric.mod.json"
+}
+
 tasks.withType(JavaCompile).configureEach {
     options.release = 25
 }
