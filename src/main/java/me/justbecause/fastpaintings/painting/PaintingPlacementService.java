@@ -166,9 +166,7 @@ public final class PaintingPlacementService {
     ) {
         BlockPos anchorPos = footprint.anchor();
         Direction facing = footprint.facing();
-        int updateFlags = (mode == PlacementMode.MIGRATION)
-                ? (Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE)
-                : (Block.UPDATE_ALL | Block.UPDATE_KNOWN_SHAPE);
+        int placementFlags = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE;
 
         // 1. Snapshot original states
         Map<BlockPos, BlockState> originalStates = new HashMap<>();
@@ -181,7 +179,24 @@ public final class PaintingPlacementService {
 
         boolean success = false;
         try {
-            // 2. Place Part Blocks first
+            // 2. Place Anchor Block first
+            boolean isAnchorWaterlogged = level.getFluidState(anchorPos).getType() == Fluids.WATER;
+            BlockState anchorState = ModRegistry.PAINTING_BLOCK.defaultBlockState()
+                    .setValue(PaintingBlock.FACING, facing)
+                    .setValue(PaintingBlock.WATERLOGGED, isAnchorWaterlogged);
+
+            if (!level.setBlock(anchorPos, anchorState, placementFlags)) {
+                return false;
+            }
+
+            // 3. Set variant on Anchor BE immediately so parts can resolve anchor footprint
+            if (level.getBlockEntity(anchorPos) instanceof PaintingBlockEntity be) {
+                be.setVariant(variant);
+            } else {
+                return false;
+            }
+
+            // 4. Place Part Blocks
             for (BlockPos cellPos : footprint.occupiedCells()) {
                 if (cellPos.equals(anchorPos)) {
                     continue;
@@ -191,29 +206,12 @@ public final class PaintingPlacementService {
                         .setValue(PaintingPartBlock.FACING, facing)
                         .setValue(PaintingPartBlock.WATERLOGGED, isWaterlogged);
 
-                if (!level.setBlock(cellPos, partState, updateFlags)) {
+                if (!level.setBlock(cellPos, partState, placementFlags)) {
                     return false;
                 }
             }
 
-            // 3. Place Anchor Block
-            boolean isAnchorWaterlogged = level.getFluidState(anchorPos).getType() == Fluids.WATER;
-            BlockState anchorState = ModRegistry.PAINTING_BLOCK.defaultBlockState()
-                    .setValue(PaintingBlock.FACING, facing)
-                    .setValue(PaintingBlock.WATERLOGGED, isAnchorWaterlogged);
-
-            if (!level.setBlock(anchorPos, anchorState, updateFlags)) {
-                return false;
-            }
-
-            // 4. Set variant on Anchor BE
-            if (level.getBlockEntity(anchorPos) instanceof PaintingBlockEntity be) {
-                be.setVariant(variant);
-                success = true;
-            } else {
-                return false;
-            }
-
+            success = true;
         } finally {
             // 5. Rollback on failure
             if (!success) {
@@ -224,6 +222,9 @@ public final class PaintingPlacementService {
         }
 
         if (mode == PlacementMode.PLAYER_PLACE) {
+            for (BlockPos cellPos : footprint.occupiedCells()) {
+                level.updateNeighborsAt(cellPos, level.getBlockState(cellPos).getBlock());
+            }
             level.playSound(null, anchorPos, SoundEvents.PAINTING_PLACE, SoundSource.BLOCKS, 1.0F, 1.0F);
             if (player != null) {
                 level.gameEvent(player, GameEvent.BLOCK_CHANGE, anchorPos);

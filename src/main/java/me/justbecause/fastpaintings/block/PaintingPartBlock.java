@@ -106,15 +106,24 @@ public class PaintingPartBlock extends HorizontalDirectionalBlock implements Sim
         return backingState.isSolid() || DiodeBlock.isDiode(backingState);
     }
 
+    public sealed interface AnchorLookupResult {
+        record Found(BlockPos pos) implements AnchorLookupResult {}
+        enum Unloaded implements AnchorLookupResult { INSTANCE }
+        enum Orphan implements AnchorLookupResult { INSTANCE }
+    }
+
     /**
      * Resolves the anchor position of this part block within its bounded 16x16 plane.
-     * Returns null if no owning anchor exists (orphan part), allowing self-healing.
+     * Distinguishes a found anchor, an uninspected candidate in an unloaded chunk,
+     * and a proven orphan part whose candidate plane was completely inspected.
      */
-    public static @Nullable BlockPos findAnchorPos(LevelReader level, BlockPos partPos, BlockState partState) {
+    public static AnchorLookupResult findAnchorLookup(LevelReader level, BlockPos partPos, BlockState partState) {
         Direction facing = partState.getValue(FACING);
         Direction left = facing.getCounterClockWise();
 
         BlockPos.MutableBlockPos candidate = new BlockPos.MutableBlockPos();
+        boolean hasUnloadedCandidates = false;
+
         // Check closest distances first for fastest lookup
         for (int r = 0; r <= 15; r++) {
             for (int dy = -r; dy <= r; dy++) {
@@ -122,19 +131,46 @@ public class PaintingPartBlock extends HorizontalDirectionalBlock implements Sim
                     if (Math.max(Math.abs(dx), Math.abs(dy)) != r) {
                         continue; // Only check outer perimeter of radius r
                     }
+                    candidate.set(
+                            partPos.getX() + left.getStepX() * dx,
+                            partPos.getY() + dy,
+                            partPos.getZ() + left.getStepZ() * dx
+                    );
+
+                    if (level.isOutsideBuildHeight(candidate.getY())) {
+                        continue;
+                    }
+
                     boolean loaded = (level instanceof Level lvl) ? lvl.isLoaded(candidate) : level.hasChunkAt(candidate);
                     if (loaded) {
                         BlockState state = level.getBlockState(candidate);
                         if (state.is(ModRegistry.PAINTING_BLOCK) && state.getValue(PaintingBlock.FACING) == facing) {
                             if (level.getBlockEntity(candidate) instanceof PaintingBlockEntity be) {
-                                if (be.getFootprint().occupiedCells().contains(partPos)) {
-                                    return candidate.immutable();
+                                if (be.getFootprint().containsOccupied(partPos)) {
+                                    return new AnchorLookupResult.Found(candidate.immutable());
                                 }
                             }
                         }
+                    } else {
+                        hasUnloadedCandidates = true;
                     }
                 }
             }
+        }
+
+        if (hasUnloadedCandidates) {
+            return AnchorLookupResult.Unloaded.INSTANCE;
+        }
+        return AnchorLookupResult.Orphan.INSTANCE;
+    }
+
+    /**
+     * Resolves the anchor position of this part block within its bounded 16x16 plane.
+     * Returns null if no owning anchor is currently found or inspectable.
+     */
+    public static @Nullable BlockPos findAnchorPos(LevelReader level, BlockPos partPos, BlockState partState) {
+        if (findAnchorLookup(level, partPos, partState) instanceof AnchorLookupResult.Found found) {
+            return found.pos();
         }
         return null;
     }
@@ -142,13 +178,15 @@ public class PaintingPartBlock extends HorizontalDirectionalBlock implements Sim
     @Override
     protected void neighborChanged(BlockState state, Level level, BlockPos pos, Block neighborBlock, @Nullable Orientation orientation, boolean movedByPiston) {
         if (!level.isClientSide()) {
-            BlockPos anchorPos = findAnchorPos(level, pos, state);
-            if (anchorPos != null && level.getBlockEntity(anchorPos) instanceof PaintingBlockEntity be) {
-                if (!be.getFootprint().isSupported(level)) {
-                    be.removeFootprint(level, true, null);
+            AnchorLookupResult lookup = findAnchorLookup(level, pos, state);
+            if (lookup instanceof AnchorLookupResult.Found found) {
+                if (level.getBlockEntity(found.pos()) instanceof PaintingBlockEntity be) {
+                    if (!be.getFootprint().isSupported(level)) {
+                        be.removeFootprint(level, true, null);
+                    }
                 }
-            } else {
-                // Orphan helper part self-healing: restore fluid state
+            } else if (lookup instanceof AnchorLookupResult.Orphan) {
+                // Orphan helper part self-healing: restore fluid state only when proven orphan
                 level.setBlock(pos, state.getFluidState().createLegacyBlock(), Block.UPDATE_ALL | Block.UPDATE_SUPPRESS_DROPS);
             }
         }
@@ -157,10 +195,12 @@ public class PaintingPartBlock extends HorizontalDirectionalBlock implements Sim
     @Override
     public BlockState playerWillDestroy(Level level, BlockPos pos, BlockState state, Player player) {
         if (!level.isClientSide()) {
-            BlockPos anchorPos = findAnchorPos(level, pos, state);
-            if (anchorPos != null && level.getBlockEntity(anchorPos) instanceof PaintingBlockEntity be) {
-                be.removeFootprint(level, !player.isCreative(), player);
-            } else {
+            AnchorLookupResult lookup = findAnchorLookup(level, pos, state);
+            if (lookup instanceof AnchorLookupResult.Found found) {
+                if (level.getBlockEntity(found.pos()) instanceof PaintingBlockEntity be) {
+                    be.removeFootprint(level, !player.isCreative(), player);
+                }
+            } else if (lookup instanceof AnchorLookupResult.Orphan) {
                 level.setBlock(pos, state.getFluidState().createLegacyBlock(), Block.UPDATE_ALL | Block.UPDATE_SUPPRESS_DROPS);
             }
         }
@@ -173,10 +213,12 @@ public class PaintingPartBlock extends HorizontalDirectionalBlock implements Sim
         if (level instanceof ServerLevel serverLevel
                 && projectile.mayInteract(serverLevel, pos)
                 && projectile.mayBreak(serverLevel)) {
-            BlockPos anchorPos = findAnchorPos(level, pos, state);
-            if (anchorPos != null && level.getBlockEntity(anchorPos) instanceof PaintingBlockEntity be) {
-                be.removeFootprint(level, true, projectile);
-            } else {
+            AnchorLookupResult lookup = findAnchorLookup(level, pos, state);
+            if (lookup instanceof AnchorLookupResult.Found found) {
+                if (level.getBlockEntity(found.pos()) instanceof PaintingBlockEntity be) {
+                    be.removeFootprint(level, true, projectile);
+                }
+            } else if (lookup instanceof AnchorLookupResult.Orphan) {
                 level.setBlock(pos, state.getFluidState().createLegacyBlock(), Block.UPDATE_ALL | Block.UPDATE_SUPPRESS_DROPS);
             }
         }
@@ -184,9 +226,11 @@ public class PaintingPartBlock extends HorizontalDirectionalBlock implements Sim
 
     @Override
     protected void affectNeighborsAfterRemoval(BlockState state, ServerLevel level, BlockPos pos, boolean movedByPiston) {
-        BlockPos anchorPos = findAnchorPos(level, pos, state);
-        if (anchorPos != null && level.getBlockEntity(anchorPos) instanceof PaintingBlockEntity be) {
-            be.removeFootprint(level, true, null);
+        AnchorLookupResult lookup = findAnchorLookup(level, pos, state);
+        if (lookup instanceof AnchorLookupResult.Found found) {
+            if (level.getBlockEntity(found.pos()) instanceof PaintingBlockEntity be) {
+                be.removeFootprint(level, true, null);
+            }
         }
         super.affectNeighborsAfterRemoval(state, level, pos, movedByPiston);
     }
