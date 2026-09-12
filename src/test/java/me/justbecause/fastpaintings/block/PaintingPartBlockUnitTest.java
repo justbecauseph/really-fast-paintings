@@ -246,8 +246,8 @@ public class PaintingPartBlockUnitTest {
     }
 
     @Test
-    @DisplayName("Diagnostic candidate lookup makes zero reads into unloaded chunks")
-    void testDiagnosticMakesNoReadsIntoUnloadedChunks() {
+    @DisplayName("Anchor lookup candidate search makes zero reads into unloaded chunks")
+    void testAnchorLookupCandidateMakesNoReadsIntoUnloadedChunks() {
         Direction facing = Direction.SOUTH;
         BlockPos partPos = new BlockPos(100, 64, 100);
         BlockState partState = ModRegistry.PAINTING_PART_BLOCK.defaultBlockState().setValue(PaintingPartBlock.FACING, facing);

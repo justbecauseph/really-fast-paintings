@@ -140,6 +140,17 @@ public final class PaintingConversionService {
         ) throws Throwable;
     }
 
+    @FunctionalInterface
+    public interface EntityCleaner {
+        void cleanUp(Painting painting, ServerLevel serverLevel) throws Throwable;
+    }
+
+    public static void defaultEntityCleanup(Painting painting, ServerLevel serverLevel) {
+        if (serverLevel.getEntity(painting.getUUID()) != null || painting.isAlive()) {
+            painting.discard();
+        }
+    }
+
     public static boolean tryRestore(
             PaintingBlockEntity blockEntity,
             ServerLevel serverLevel,
@@ -155,6 +166,41 @@ public final class PaintingConversionService {
             java.util.function.Predicate<Painting> entitySpawner,
             java.util.function.BiConsumer<PaintingBlockEntity, ServerLevel> footprintRemover,
             RollbackHandler rollbackHandler
+    ) {
+        return tryRestore(
+                blockEntity,
+                serverLevel,
+                entitySpawner,
+                footprintRemover,
+                rollbackHandler,
+                PaintingConversionService::defaultEntityCleanup
+        );
+    }
+
+    public static boolean tryRestore(
+            PaintingBlockEntity blockEntity,
+            ServerLevel serverLevel,
+            java.util.function.Predicate<Painting> entitySpawner,
+            java.util.function.BiConsumer<PaintingBlockEntity, ServerLevel> footprintRemover,
+            EntityCleaner entityCleaner
+    ) {
+        return tryRestore(
+                blockEntity,
+                serverLevel,
+                entitySpawner,
+                footprintRemover,
+                PaintingConversionService::rollbackRestoration,
+                entityCleaner
+        );
+    }
+
+    public static boolean tryRestore(
+            PaintingBlockEntity blockEntity,
+            ServerLevel serverLevel,
+            java.util.function.Predicate<Painting> entitySpawner,
+            java.util.function.BiConsumer<PaintingBlockEntity, ServerLevel> footprintRemover,
+            RollbackHandler rollbackHandler,
+            EntityCleaner entityCleaner
     ) {
         Holder<PaintingVariant> variant = blockEntity.getVariant();
         if (variant == null) {
@@ -216,14 +262,44 @@ public final class PaintingConversionService {
             return false;
         } finally {
             if (!committed) {
-                // Reconcile and discard attempted entity to prevent duplication
+                // Stage 1: Entity reconciliation and cleanup
                 unsuppressRestoredEntity(painting.getUUID());
                 painting.removeTag(RESTORED_TAG);
-                if (serverLevel.getEntity(painting.getUUID()) != null || painting.isAlive()) {
-                    painting.discard();
+
+                Throwable cleanupError = null;
+                try {
+                    entityCleaner.cleanUp(painting, serverLevel);
+                } catch (Throwable ce) {
+                    cleanupError = ce;
                 }
 
-                // Rollback captured footprint and restore operational removal-guard state
+                // Establish resulting entity state
+                boolean entityRemainsActive = false;
+                try {
+                    if (serverLevel.getEntity(painting.getUUID()) != null || painting.isAlive()) {
+                        entityRemainsActive = true;
+                    }
+                } catch (Throwable t) {
+                    entityRemainsActive = true;
+                }
+
+                // Crucial safety check: do not recreate the block painting if entity cleanup failed and the attempted entity remains active
+                if (entityRemainsActive) {
+                    Throwable primary = cleanupError != null ? cleanupError : failure;
+                    RestorationException rex = new RestorationException(
+                            "Restoration recovery aborted at " + anchorPos + ": entity cleanup failed and attempted vanilla entity remains active in the level; footprint rollback skipped to prevent duplicate representations",
+                            primary
+                    );
+                    if (failure != null && primary != failure) {
+                        rex.addSuppressed(failure);
+                    }
+                    if (cleanupError != null && primary != cleanupError) {
+                        rex.addSuppressed(cleanupError);
+                    }
+                    throw rex;
+                }
+
+                // Stage 2: Footprint rollback (safe to execute because attempted entity is confirmed not active)
                 Throwable rollbackError = null;
                 boolean rollbackSuccess = false;
                 try {
@@ -238,14 +314,30 @@ public final class PaintingConversionService {
                 }
 
                 if (!rollbackSuccess || rollbackError != null) {
+                    Throwable primaryCause = rollbackError != null ? rollbackError : (cleanupError != null ? cleanupError : failure);
                     RestorationException rex = new RestorationException(
                             "Restoration rollback verification failed: footprint could not be restored to original states at " + anchorPos,
-                            rollbackError != null ? rollbackError : failure
+                            primaryCause
                     );
-                    if (failure != null && rollbackError != null) {
+                    if (failure != null && primaryCause != failure) {
                         rex.addSuppressed(failure);
                     }
+                    if (cleanupError != null && primaryCause != cleanupError) {
+                        rex.addSuppressed(cleanupError);
+                    }
+                    if (rollbackError != null && primaryCause != rollbackError) {
+                        rex.addSuppressed(rollbackError);
+                    }
                     throw rex;
+                }
+
+                // If cleanup threw but entity was successfully removed and rollback succeeded:
+                if (cleanupError != null) {
+                    if (failure != null) {
+                        failure.addSuppressed(cleanupError);
+                    } else {
+                        failure = cleanupError;
+                    }
                 }
 
                 if (failure != null) {
@@ -261,7 +353,7 @@ public final class PaintingConversionService {
         }
     }
 
-    private static boolean rollbackRestoration(
+    public static boolean rollbackRestoration(
             ServerLevel serverLevel,
             PaintingFootprint footprint,
             BlockPos anchorPos,

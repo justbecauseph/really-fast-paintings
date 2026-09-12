@@ -20,6 +20,7 @@ import net.minecraft.world.entity.decoration.painting.Painting;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
+import net.minecraft.world.level.block.state.BlockState;
 import me.justbecause.fastpaintings.init.ModRegistry;
 
 import java.util.ArrayList;
@@ -51,6 +52,7 @@ public final class PaintingMigrationCommand {
         int totalEntities = 0;
         int totalAnchors = 0;
         int totalHelperParts = 0;
+        int totalAnchorBes = 0;
         int totalScannedChunks = 0;
 
         Iterable<ServerLevel> levels = (source.getEntity() instanceof ServerPlayer player)
@@ -67,8 +69,10 @@ public final class PaintingMigrationCommand {
             Set<LevelChunk> chunks = findLoadedChunks(level, source);
             totalScannedChunks += chunks.size();
             for (LevelChunk chunk : chunks) {
-                totalAnchors += countAnchorsInChunk(chunk);
-                totalHelperParts += countHelperPartsInChunk(chunk);
+                ChunkScan scan = scanChunk(chunk);
+                totalAnchors += scan.anchorBlocks();
+                totalHelperParts += scan.helperParts();
+                totalAnchorBes += scan.anchorBlockEntities();
             }
         }
 
@@ -76,11 +80,12 @@ public final class PaintingMigrationCommand {
         final int anchors = totalAnchors;
         final int parts = totalHelperParts;
         final int scannedChunks = totalScannedChunks;
+        final int anchorBes = totalAnchorBes;
         source.sendSuccess(() -> Component.literal(
                 String.format("§6[FastPaintings]§r Scanned §e%d§r loaded chunks (inspects loaded chunks around active players/spawn; does not scan offline saves or unloaded chunks):\n" +
                         "  - Vanilla painting entities: §e%d§r\n" +
-                        "  - Block painting anchors: §e%d§r\n" +
-                        "  - Multipart helper parts: §e%d§r", scannedChunks, entities, anchors, parts)
+                        "  - Block painting anchors: §e%d§r (BlockEntities: §e%d§r)\n" +
+                        "  - Multipart helper parts: §e%d§r", scannedChunks, entities, anchors, anchorBes, parts)
         ), false);
 
         return 1;
@@ -199,36 +204,50 @@ public final class PaintingMigrationCommand {
         }
     }
 
-    public static int countAnchorsInChunk(LevelChunk chunk) {
-        int count = 0;
-        for (BlockEntity be : chunk.getBlockEntities().values()) {
-            if (be instanceof PaintingBlockEntity) {
-                count++;
-            }
-        }
-        return count;
-    }
+    public record ChunkScan(int anchorBlocks, int helperParts, int anchorBlockEntities) {}
 
-    public static int countHelperPartsInChunk(LevelChunk chunk) {
-        int count = 0;
+    public static ChunkScan scanChunk(LevelChunk chunk) {
+        int anchorBlocks = 0;
+        int helperParts = 0;
         for (LevelChunkSection section : chunk.getSections()) {
             if (section == null || section.hasOnlyAir()) {
                 continue;
             }
-            if (!section.maybeHas(state -> state.is(ModRegistry.PAINTING_PART_BLOCK))) {
+            if (!section.maybeHas(state -> state.is(ModRegistry.PAINTING_BLOCK) || state.is(ModRegistry.PAINTING_PART_BLOCK))) {
                 continue;
             }
             for (int y = 0; y < 16; y++) {
                 for (int z = 0; z < 16; z++) {
                     for (int x = 0; x < 16; x++) {
-                        if (section.getBlockState(x, y, z).is(ModRegistry.PAINTING_PART_BLOCK)) {
-                            count++;
+                        BlockState state = section.getBlockState(x, y, z);
+                        if (state.is(ModRegistry.PAINTING_BLOCK)) {
+                            anchorBlocks++;
+                        } else if (state.is(ModRegistry.PAINTING_PART_BLOCK)) {
+                            helperParts++;
                         }
                     }
                 }
             }
         }
-        return count;
+        int anchorBes = 0;
+        for (BlockEntity be : chunk.getBlockEntities().values()) {
+            if (be instanceof PaintingBlockEntity) {
+                anchorBes++;
+            }
+        }
+        return new ChunkScan(anchorBlocks, helperParts, anchorBes);
+    }
+
+    public static int countAnchorsInChunk(LevelChunk chunk) {
+        return scanChunk(chunk).anchorBlocks();
+    }
+
+    public static int countHelperPartsInChunk(LevelChunk chunk) {
+        return scanChunk(chunk).helperParts();
+    }
+
+    public static int countAnchorBlockEntitiesInChunk(LevelChunk chunk) {
+        return scanChunk(chunk).anchorBlockEntities();
     }
 
     private PaintingMigrationCommand() {}

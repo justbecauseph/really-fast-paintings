@@ -32,7 +32,9 @@
   - `6ccddc9`: `fix: resolve multipart painting anchors outside world origin`
   - `afa0d9e`: `test: cover callback removal and multi-tick restoration`
   - `105191d`: `fix: address reproduced restoration safety failures`
-  - Pending Commit: `fix: harden restoration recovery boundary, chunk-granular stats, and regression test suite`
+  - `84c3faf`: `fix: address remaining review items`
+  - `9219c07`: `fix: enforce safe restoration rollback, complete footprint cleanup, and chunk-granular diagnostics`
+  - Pending Commit: `fix: separate cleanup and rollback recovery stages and enumerate anchor block states`
 
 - **Modified Files:**
   - `src/main/java/me/justbecause/fastpaintings/block/PaintingPartBlock.java`
@@ -53,27 +55,31 @@
      - Added `AnchorLookupResult` (`Found`, `Unloaded`, `Orphan`) distinguishing uninspected unloaded candidates from proven orphans.
      - Prevented orphan destruction and forced chunk loads when candidate chunks are unloaded.
      - Fixed placement order in `PaintingPlacementService`: anchor is placed first and BE variant set before placing part blocks.
-  2. **Failure-Safe Restoration Recovery Boundary & Atomic Rollback (1B):**
+  2. **Failure-Safe Restoration Recovery Boundary & Staged Rollback (1B):**
      - Expanded recovery boundary in `PaintingConversionService.tryRestore()` to begin before destructive footprint removal (`footprintRemover.accept`).
      - Added pre-spawn footprint verification: validates that all footprint cells were cleared of `PAINTING_BLOCK` and `PAINTING_PART_BLOCK` before attempting entity spawning; aborts on incomplete removal without invoking the spawner.
-     - If spawning fails or throws, discards attempted entities (`painting.discard()`) to ensure 0 entity leaks.
-     - Implemented `RollbackHandler` functional interface allowing deterministic testing of verification and I/O error handling during rollback.
+     - Separated Stage 1 (entity reconciliation and cleanup) from Stage 2 (footprint rollback) in `finally`.
+     - Added `EntityCleaner` functional interface and `defaultEntityCleanup(Painting, ServerLevel)`.
+     - Verified attempted entity status before rollback: if entity cleanup fails and the attempted vanilla entity remains active in the level, footprint rollback is skipped to prevent duplicate representations (entity + block), throwing a location-bearing `RestorationException` preserving both the primary and cleanup errors.
+     - Implemented `RollbackHandler` functional interface allowing deterministic testing of verification and I/O error handling during rollback. Made `rollbackRestoration` `public static` and added overloaded `tryRestore` methods.
      - On rollback write failure, throws `RestorationException` containing anchor position, cause, and attaches the original failure as a suppressed exception.
      - Restores operational removal-guard state (`restoredBe.setRemoving(false)`) on surviving anchors.
      - Preserved `RESTORED_TAG` and UUID suppression during failed operator reconversion attempts (e.g. special data obstacle) until conversion commits successfully.
-  3. **Migration Commands & Scope Disclosure:**
-     - Updated `PaintingMigrationCommand.runStats()` to collect deduplicated `Set<LevelChunk>` and count anchors via `countAnchorsInChunk` and helper parts via `countHelperPartsInChunk`.
-     - `countHelperPartsInChunk` inspects chunk sections using `section.maybeHas(...)` and iterates intra-section blocks `(0..15)`, never reading across chunk boundaries into unloaded chunks.
-     - Detects and counts orphan helper parts even without anchors.
+  3. **Migration Commands & Section-Granular State Auditing:**
+     - Updated `PaintingMigrationCommand.scanChunk(LevelChunk chunk)` to scan chunk sections via `section.maybeHas(...)` and iterate intra-section blocks `(0..15)` for both `PAINTING_BLOCK` anchor states and `PAINTING_PART_BLOCK` helper states, never reading across chunk boundaries into unloaded chunks.
+     - Separated anchor block state counts (`scanChunk(chunk).anchorBlocks()`) from instantiated block entities (`scanChunk(chunk).anchorBlockEntities()`), ensuring missing-BE anchor states never report false clean (0 anchors).
+     - Retained block entity count as a visible diagnostic in `/fastpaintings stats`: `Block painting anchors: %d (BlockEntities: %d)`.
      - Clarified command scopes in console/player messages and `README.md`: `/fastpaintings convert` checks all loaded entities across dimensions; `/fastpaintings stats` and `/fastpaintings restore` inspect loaded chunks around active players/spawn without scanning offline region files or unloaded chunks.
   4. **Test Suite Hardening & Honesty (1C):**
-     - `PaintingPartBlockUnitTest`: Added `testDiagnosticMakesNoReadsIntoUnloadedChunks`, verifying candidate lookup makes zero reads into unloaded chunks using chunk-granular stub assertions.
+     - `PaintingPartBlockUnitTest`: Renamed `testAnchorLookupCandidateMakesNoReadsIntoUnloadedChunks`, verifying candidate lookup makes zero reads into unloaded chunks using chunk-granular stub assertions.
      - `testPartAnchorResolutionAndBreakOutsideOrigin`: Asserts both `drops.size() == 1` and `totalDropCount == 1`.
      - `testStatsCountsOrphanHelperPartsWithoutAnchors`: Proves orphan helper parts without anchors are accurately counted in chunk stats.
-     - `testRestorationRemovalThrowsRollback`: Removal throws after cell mutation; asserts footprint recovered, zero entity leaks, and surviving anchor operational (`!isRemoving`).
+     - `testRestorationRemovalThrowsRollback`: Removal throws after cell mutation with removal guard active; asserts footprint recovered, zero entity leaks, drops are empty, and surviving anchor operational (`!isRemoving`).
      - `testRestorationIncompleteRemovalAborts`: Rejected removal aborts without invoking spawner.
-     - `testRestorationSpawnerThrowingWithInsertedEntity`: Spawner inserts entity then throws; asserts attempted entity is discarded (0 leaked entities) and block painting restored.
+     - `testRestorationSpawnerThrowingWithInsertedEntity`: Spawner inserts entity (`added == true`, `level.getEntity == painting`, `painting.isAlive()`) then throws; asserts attempted entity is discarded (0 leaked entities) and block painting restored.
      - `testRestorationRollbackFailureThrows`: Rollback write throws; asserts `RestorationException` with location, cause, and suppressed original error.
+     - `testRestorationCleanupFailurePreventsDuplicateRepresentations`: Spawner throws with inserted entity and cleanup throws leaving entity active; asserts `RestorationException` with location and preserved errors, verifies footprint rollback is skipped so no duplicate block representation is created, and confirms active entity survives until teardown.
+     - `testStatsCountsAnchorBlockWithoutBlockEntity`: Fixture with `PAINTING_BLOCK` state and no `BlockEntity` in chunk; asserts anchor count == 1 and anchor BE count == 0.
      - `testOperatorReconversionPreservesSuppressionOnFailure`: Failed operator reconversion preserves suppression markers; removing obstacle permits conversion to succeed.
 
 - **Verification Evidence:**
@@ -86,7 +92,7 @@
     - `me.justbecause.fastpaintings.client.render.PaintingRenderPipelineTest` (3 tests)
     - `me.justbecause.fastpaintings.client.render.PaintingInstrumentationTest` (2 tests)
     - `me.justbecause.fastpaintings.client.render.PaintingLightingCacheTest` (2 tests)
-  - `./gradlew runGameTest`: 21 server GameTests passed (20 mod tests in `FastPaintingsGameTests` + 1 Fabric API test, 0 failures):
+  - `./gradlew runGameTest`: 23 server GameTests passed (22 mod tests in `FastPaintingsGameTests` + 1 Fabric API test, 0 failures):
     1. `test1x1PlacementAndBreak`
     2. `test2x2MigrationAndRestore`
     3. `testWaterloggedPreservation`
@@ -107,5 +113,6 @@
     18. `testRestorationSpawnerThrowingWithInsertedEntity`
     19. `testRestorationRollbackFailureThrows`
     20. `testOperatorReconversionPreservesSuppressionOnFailure`
+    21. `testRestorationCleanupFailurePreventsDuplicateRepresentations`
+    22. `testStatsCountsAnchorBlockWithoutBlockEntity`
   - `./gradlew build`: Build successful, generated distributable `build/libs/fastpaintings-1.0.0.jar` and `build/libs/fastpaintings-1.0.0-sources.jar`.
-
