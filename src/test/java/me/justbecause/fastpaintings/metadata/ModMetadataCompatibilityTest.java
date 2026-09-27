@@ -61,33 +61,31 @@ public class ModMetadataCompatibilityTest {
         assertEquals("fastpaintings", id, "Mod ID must be 'fastpaintings'");
 
         String version = extractJsonField(json, "version");
-        assertEquals("1.2.0-rc.2", version, "Expanded mod version must match project version 1.2.0-rc.2");
+        assertEquals("1.2.0-rc.3", version, "Expanded mod version must match project version 1.2.0-rc.3");
     }
 
     @Test
-    @DisplayName("Minecraft version predicate from processed metadata strictly accepts 26.3-rc.2 and rejects other versions")
+    @DisplayName("Minecraft version predicate from processed metadata strictly accepts final 26.3 and rejects other versions")
     public void testMinecraftVersionPredicate() throws IOException, VersionParsingException {
         String json = readMetadataContent();
         String mcPredicateStr = extractJsonField(json, "minecraft");
-        assertEquals("26.3-rc.2", mcPredicateStr, "Expanded minecraft dependency must be '26.3-rc.2'");
+        assertEquals("26.3", mcPredicateStr, "Expanded minecraft dependency must be '26.3'");
 
         VersionPredicate predicate = VersionPredicate.parse(mcPredicateStr);
 
-        // Target RC version MUST be accepted
-        Version targetRc = Version.parse("26.3-rc.2");
-        assertTrue(predicate.test(targetRc), "Target 26.3-rc.2 must be accepted");
+        // Final target version MUST be accepted
+        Version target = Version.parse("26.3");
+        assertTrue(predicate.test(target), "Final 26.3 must be accepted");
 
         // Older versions MUST be rejected
         assertFalse(predicate.test(Version.parse("26.2")), "Baseline 26.2 must be rejected");
         assertFalse(predicate.test(Version.parse("26.1")), "Older 26.1 must be rejected");
 
-        // Other pre-releases / RCs MUST be rejected
+        // Pre-releases MUST be rejected
         assertFalse(predicate.test(Version.parse("26.3-rc.1")), "Older 26.3-rc.1 must be rejected");
-        assertFalse(predicate.test(Version.parse("26.3-rc.3")), "Different 26.3-rc.3 must be rejected");
         assertFalse(predicate.test(Version.parse("26.3-pre.3")), "26.3-pre-3 must be rejected");
-
-        // Final 26.3 release MUST be rejected until port is explicitly updated and tested for final
-        assertFalse(predicate.test(Version.parse("26.3")), "Final 26.3 must be rejected by RC-2 specific predicate");
+        assertFalse(predicate.test(Version.parse("26.3-rc.2")), "26.3-rc.2 must be rejected by the final-release predicate");
+        assertFalse(predicate.test(Version.parse("26.3-rc.3")), "26.3-rc.3 must be rejected by the final-release predicate");
 
         // Future versions MUST be rejected
         assertFalse(predicate.test(Version.parse("26.4")), "Future 26.4 must be rejected");
@@ -110,17 +108,17 @@ public class ModMetadataCompatibilityTest {
     }
 
     @Test
-    @DisplayName("Fabric API predicate from processed metadata enforces >=0.160.4")
+    @DisplayName("Fabric API predicate from processed metadata enforces >=0.161.0")
     public void testFabricApiVersionPredicate() throws IOException, VersionParsingException {
         String json = readMetadataContent();
         String apiPredicateStr = extractJsonField(json, "fabric-api");
-        assertEquals(">=0.160.4", apiPredicateStr, "Expanded fabric-api dependency must be '>=0.160.4'");
+        assertEquals(">=0.161.0", apiPredicateStr, "Expanded fabric-api dependency must be '>=0.161.0'");
 
         VersionPredicate predicate = VersionPredicate.parse(apiPredicateStr);
 
-        assertTrue(predicate.test(Version.parse("0.160.4")), "Fabric API 0.160.4 must be accepted");
-        assertTrue(predicate.test(Version.parse("0.160.5")), "Fabric API 0.160.5 must be accepted");
-        assertFalse(predicate.test(Version.parse("0.160.3")), "Fabric API 0.160.3 must be rejected");
+        assertTrue(predicate.test(Version.parse("0.161.0")), "Fabric API 0.161.0 must be accepted");
+        assertTrue(predicate.test(Version.parse("0.161.1")), "Fabric API 0.161.1 must be accepted");
+        assertFalse(predicate.test(Version.parse("0.160.7")), "Fabric API 0.160.7 must be rejected");
         assertFalse(predicate.test(Version.parse("0.158.0")), "Fabric API 0.158.0 must be rejected");
     }
 
@@ -130,11 +128,11 @@ public class ModMetadataCompatibilityTest {
         test.testMetadataIntegrity();
         System.out.println("  [PASS] testMetadataIntegrity: valid id, version, zero unresolved placeholders");
         test.testMinecraftVersionPredicate();
-        System.out.println("  [PASS] testMinecraftVersionPredicate: strictly accepts 26.3-rc-2, rejects 26.2, 26.3-rc-1, 26.3-rc-3, 26.3 (final), 26.4");
+        System.out.println("  [PASS] testMinecraftVersionPredicate: strictly accepts 26.3 final, rejects 26.2, 26.3 prereleases, 26.4");
         test.testLoaderVersionPredicate();
         System.out.println("  [PASS] testLoaderVersionPredicate: enforces >=0.19.5 (accepts 0.19.5/0.19.6, rejects 0.19.4/0.19.3/0.18.4)");
         test.testFabricApiVersionPredicate();
-        System.out.println("  [PASS] testFabricApiVersionPredicate: enforces >=0.160.4");
+        System.out.println("  [PASS] testFabricApiVersionPredicate: enforces >=0.161.0");
         System.out.println("All metadata compatibility checks passed successfully.");
     }
 }

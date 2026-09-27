@@ -1,11 +1,11 @@
 # Really Fast Paintings
 
-[![Minecraft](https://img.shields.io/badge/Minecraft-26.2-brightgreen.svg)](https://minecraft.net/)
-[![Fabric API](https://img.shields.io/badge/Fabric%20API-0.158.0%2B26.2-blue.svg)](https://fabricmc.net/)
+[![Minecraft](https://img.shields.io/badge/Minecraft-26.3-brightgreen.svg)](https://minecraft.net/)
+[![Fabric API](https://img.shields.io/badge/Fabric%20API-0.161.0%2B26.3-blue.svg)](https://fabricmc.net/)
 [![Java](https://img.shields.io/badge/Java-25-orange.svg)](https://openjdk.org/)
 [![License](https://img.shields.io/badge/License-MPL--2.0-blue.svg)](LICENSE)
 
-**Really Fast Paintings** is a Fabric performance mod for Minecraft 26.2 that replaces vanilla `Painting` entities with non-ticking, block-backed decorations while preserving vanilla painting variants, placement behavior, collision/raycast interaction, support checks, and datapack-defined painting dimensions.
+**Really Fast Paintings** is a Fabric performance mod for Minecraft 26.3 that replaces vanilla `Painting` entities with non-ticking, block-backed decorations while preserving vanilla painting variants, placement behavior, collision/raycast interaction, support checks, and datapack-defined painting dimensions.
 
 Each converted painting uses a single logical `PaintingBlockEntity` at its anchor and lightweight non-ticking part blocks for the rest of its footprint. This removes the need to keep a full entity alive for every painting while still allowing large paintings to behave like normal wall decorations.
 
@@ -157,9 +157,9 @@ build/libs/
 
 The project targets:
 
-- Minecraft `26.2`
-- Fabric Loader `0.19.3`
-- Fabric API `0.158.0+26.2`
+- Minecraft `26.3`
+- Fabric Loader `0.19.5`
+- Fabric API `0.161.0+26.3`
 - Java `25`
 
 ---

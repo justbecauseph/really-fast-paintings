@@ -16,7 +16,7 @@ import java.util.function.Predicate;
 
 /**
  * Pure geometry utility for painting bounds, occupied world cells, and backing support cells.
- * Matches vanilla Minecraft 26.2 {@code Painting} and {@code HangingEntity} calculations exactly.
+ * Matches vanilla Minecraft 26.3 {@code Painting} and {@code HangingEntity} calculations exactly.
  */
 public record PaintingFootprint(
         BlockPos anchor,
@@ -147,7 +147,7 @@ public record PaintingFootprint(
 
     /**
      * Returns true if all backing support cells meet vanilla solid / diode requirements.
-     * Matches vanilla Minecraft 26.2 {@code HangingEntity#survives} contract exactly.
+     * Matches vanilla Minecraft 26.3 {@code HangingEntity#survives} contract exactly.
      */
     @SuppressWarnings("deprecation")
     public boolean isSupported(LevelReader level) {

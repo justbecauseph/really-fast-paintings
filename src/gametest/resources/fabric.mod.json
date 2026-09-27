@@ -7,6 +7,9 @@
   "entrypoints": {
     "fabric-gametest": [
       "me.justbecause.fastpaintings.test.FastPaintingsGameTests"
+    ],
+    "fabric-client-gametest": [
+      "me.justbecause.fastpaintings.test.FastPaintingsClientGameTest"
     ]
   }
 }

@@ -9,14 +9,6 @@ group = project.maven_group
 
 repositories {
     maven {
-        name = "JustBecause Public Maven"
-        url = "https://justbecauseph.github.io/maven/"
-        content {
-            includeGroup "me.justbecause.distantdecorations"
-        }
-    }
-
-    maven {
         name = "Modrinth"
         url = "https://api.modrinth.com/maven"
         content {
@@ -44,7 +36,7 @@ fabricApi {
         modId = "fastpaintings-gametest"
 
         enableGameTests = true
-        enableClientGameTests = false
+        enableClientGameTests = true
 
         // Required to run server GameTests.
         eula = true
@@ -57,9 +49,17 @@ dependencies {
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
     implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 
-    // Optional Distant Decorations API integration.
-    // Compile against the stable public Maven coordinate without requiring DD at runtime.
-    compileOnly "me.justbecause.distantdecorations:distant-decorations:0.1.0"
+    // Optional Distant Decorations 2.0.0 API for Minecraft 26.3 (Modrinth version LXYagyFH).
+    compileOnly "maven.modrinth:distant-decorations:LXYagyFH"
+
+    // Example: -PdistantDecorationsRuntimeJar=C:/path/to/distant-decorations.jar
+    if (project.hasProperty("distantDecorationsRuntimeJar")) {
+        def distantDecorationsJar = file(project.property("distantDecorationsRuntimeJar"))
+        if (!distantDecorationsJar.isFile()) {
+            throw new GradleException("distantDecorationsRuntimeJar is not a file: ${distantDecorationsJar}")
+        }
+        runtimeOnly files(distantDecorationsJar)
+    }
 
     // Tests
     testImplementation "org.junit.jupiter:junit-jupiter:5.11.4"
