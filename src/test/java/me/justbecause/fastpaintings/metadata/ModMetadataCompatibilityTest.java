@@ -61,7 +61,7 @@ public class ModMetadataCompatibilityTest {
         assertEquals("fastpaintings", id, "Mod ID must be 'fastpaintings'");
 
         String version = extractJsonField(json, "version");
-        assertEquals("1.2.0-rc.3", version, "Expanded mod version must match project version 1.2.0-rc.3");
+        assertEquals("2.0.0", version, "Expanded mod version must match project version 2.0.0");
     }
 
     @Test
